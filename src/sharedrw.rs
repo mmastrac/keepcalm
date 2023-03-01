@@ -22,12 +22,12 @@ trait SharedRWProjection<T> {
 }
 
 impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection<P>
-    for (SharedRW<T, POISON_POLICY>, Arc<ProjectorRW<T, P>>)
+    for (SharedRW<T, POISON_POLICY>, ProjectorRW<T, P>)
 {
     fn lock_read<'a>(&'a self) -> SharedReadLock<'a, P> {
         struct HiddenLock<'a, T, P> {
             lock: SharedReadLock<'a, T>,
-            projector: Arc<ProjectorRW<T, P>>,
+            projector: &'a ProjectorRW<T, P>,
         }
 
         impl<'a, T, P> std::ops::Deref for HiddenLock<'a, T, P> {
@@ -39,7 +39,7 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
 
         let lock = HiddenLock {
             lock: self.0.lock_read(),
-            projector: self.1.clone(),
+            projector: &self.1,
         };
 
         SharedReadLock {
@@ -50,7 +50,7 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
     fn lock_write<'a>(&'a self) -> SharedWriteLock<'a, P> {
         struct HiddenLock<'a, T, P> {
             lock: SharedWriteLock<'a, T>,
-            projector: Arc<ProjectorRW<T, P>>,
+            projector: &'a ProjectorRW<T, P>,
         }
 
         impl<'a, T, P> std::ops::Deref for HiddenLock<'a, T, P> {
@@ -68,7 +68,7 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
 
         let lock = HiddenLock {
             lock: self.0.lock_write(),
-            projector: self.1.clone(),
+            projector: &self.1,
         };
 
         SharedWriteLock {
@@ -136,15 +136,14 @@ impl<T: Send + Sync> SharedRW<T> {
 }
 
 impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
-    pub fn project<P: Send + Sync + 'static, I: Into<Arc<ProjectorRW<T, P>>>>(
+    pub fn project<P: Send + Sync + 'static, I: Into<ProjectorRW<T, P>>>(
         &self,
         projector: I,
     ) -> SharedRW<P, POISON_POLICY>
     where
         T: 'static,
     {
-        let projectable = (self.clone(), projector.into());
-        let projectable = Arc::new(projectable);
+        let projectable = Arc::new((self.clone(), projector.into()));
         SharedRW {
             inner: RawOrProjection::Projection(projectable),
         }
@@ -162,8 +161,7 @@ impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
     where
         T: 'static,
     {
-        let projectable = (self.clone(), Arc::new(ProjectorRW::new(ro, rw)));
-        let projectable = Arc::new(projectable);
+        let projectable = Arc::new((self.clone(), ProjectorRW::new(ro, rw)));
         SharedRW {
             inner: RawOrProjection::Projection(projectable),
         }

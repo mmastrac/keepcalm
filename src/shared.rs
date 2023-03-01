@@ -1,4 +1,4 @@
-use crate::projection::{ProjectR, Projector, RawOrProjection};
+use crate::projection::{Projector, RawOrProjection};
 use serde::Serialize;
 use std::sync::Arc;
 

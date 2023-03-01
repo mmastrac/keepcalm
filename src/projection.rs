@@ -1,3 +1,4 @@
+/// Given a type, projects a reference into that type as another type.
 pub trait ProjectR<A, B>: Send + Sync {
     fn project<'a>(&self, a: &'a A) -> &'a B;
 }
@@ -12,6 +13,7 @@ where
     }
 }
 
+/// Given a type, projects a mutable reference into that type as another type.
 pub trait ProjectW<A, B>: Send + Sync {
     fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B;
 }
@@ -41,7 +43,7 @@ impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
     }
 }
 
-/// Stores a read/write projection as two boxes.
+/// Stores a read/write projection.
 pub struct ProjectorRW<A, B> {
     pub ro: Box<dyn ProjectR<A, B>>,
     pub rw: Box<dyn ProjectW<A, B>>,
@@ -56,7 +58,7 @@ impl<A, B> ProjectorRW<A, B> {
     }
 }
 
-/// Stores a read projection as one box.
+/// Stores a read projection.
 pub struct Projector<A, B> {
     pub ro: Box<dyn ProjectR<A, B>>,
 }
@@ -64,5 +66,40 @@ pub struct Projector<A, B> {
 impl<A, B> Projector<A, B> {
     pub fn new(ro: impl ProjectR<A, B> + 'static) -> Self {
         Self { ro: Box::new(ro) }
+    }
+}
+
+/// Extract the [`Projector`] from a [`ProjectorRW`].
+impl<A, B> From<ProjectorRW<A, B>> for Projector<A, B> {
+    fn from(value: ProjectorRW<A, B>) -> Self {
+        Self { ro: value.ro }
+    }
+}
+
+#[macro_export]
+macro_rules! project {
+    ($x:ident : $type:ty, $expr:expr) => {{
+        // We just need something with a type
+        let $x: [$type; 0] = [];
+        fn make_projection<A, B>(
+            _: &[A; 0],
+            a: impl (Fn(&A) -> &B) + Send + Sync + 'static,
+            b: impl (Fn(&mut A) -> &mut B) + Send + Sync + 'static,
+        ) -> $crate::ProjectorRW<A, B> {
+            $crate::ProjectorRW::new(a, b)
+        }
+        make_projection(&$x, |$x: _| &$expr, |$x: _| &mut $expr)
+    }};
+}
+
+#[cfg(test)]
+mod test {
+    #[test]
+    fn test_projection() {
+        let x = (1, 2);
+        let projection1 = project!(x: (i32, i32), x.0);
+        let projection2 = project!(x: (i32, i32), x.1);
+        assert_eq!(1, *projection1.ro.project(&x));
+        assert_eq!(2, *projection2.ro.project(&x));
     }
 }
