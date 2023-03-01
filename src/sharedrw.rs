@@ -248,7 +248,9 @@ impl<T: Send + Sync> SharedRW<T> {
 
 #[cfg(test)]
 mod test {
-    use super::{SharedRW, Implementation};
+    use crate::project;
+
+    use super::{Implementation, SharedRW};
 
     #[test]
     pub fn test_shared_rw() {
@@ -274,5 +276,19 @@ mod test {
         *shared_2.lock_write() += 10;
 
         assert_eq!(*shared.lock_read(), (2, 11));
+    }
+
+    #[test]
+    pub fn test_nested_rw_projection() {
+        let shared = SharedRW::new((1, (2, (3, 4))));
+
+        let projection = project!(x: (i32, (i32, (i32, i32))), x.1);
+        let shared2 = shared.project(projection);
+        let projection2 = project!(x: (i32, (i32, i32)), x.1 .1);
+        let shared3 = shared2.project(projection2);
+        *shared3.lock_write() += 10;
+        (shared2.lock_write().0) += 100;
+
+        assert_eq!(*shared.lock_read(), (1, (102, (3, 14))));
     }
 }
