@@ -1,26 +1,27 @@
 use crate::projection::*;
-use std::{sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard}};
+use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 pub enum PoisonPolicy {
     Ignore = 0,
     Panic = 1,
 }
 
-#[repr(transparent)]
-pub struct SharedRW<T: Send + Sync> {
-    inner: RawOrProjection<Arc<RwLock<T>>, BoxedProjection<T>>,
+enum SharedRWImpl<T> {
+    RwLock(Arc<RwLock<T>>),
+    Projection(Arc<dyn SharedRWProjection<T> + Send + Sync>),
 }
 
-type BoxedProjection<T> = Arc<dyn SharedRWProjection<T> + Send + Sync>;
+#[repr(transparent)]
+pub struct SharedRW<T: Send + Sync> {
+    inner: SharedRWImpl<T>,
+}
 
 trait SharedRWProjection<T> {
     fn lock_read<'a>(&'a self) -> SharedReadLock<'a, T>;
     fn lock_write<'a>(&'a self) -> SharedWriteLock<'a, T>;
 }
 
-impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P>
-    for (SharedRW<T>, ProjectorRW<T, P>)
-{
+impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T, P>) {
     fn lock_read<'a>(&'a self) -> SharedReadLock<'a, P> {
         struct HiddenLock<'a, T, P> {
             lock: SharedReadLock<'a, T>,
@@ -40,7 +41,7 @@ impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P>
         };
 
         SharedReadLock {
-            lock: RawOrProjection::Projection(Box::new(lock)),
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
         }
     }
 
@@ -69,7 +70,7 @@ impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P>
         };
 
         SharedWriteLock {
-            lock: RawOrProjection::Projection(Box::new(lock)),
+            inner: SharedWriteLockInner::Projection(Box::new(lock)),
         }
     }
 }
@@ -77,27 +78,38 @@ impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P>
 impl<T: Send + Sync> Clone for SharedRW<T> {
     fn clone(&self) -> Self {
         Self {
-            inner: self.inner.clone(),
+            inner: match &self.inner {
+                SharedRWImpl::RwLock(x) => SharedRWImpl::RwLock(x.clone()),
+                SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
+            },
         }
     }
 }
 
-#[repr(transparent)]
-pub struct SharedReadLock<'a, T> {
-    lock: RawOrProjection<RwLockReadGuard<'a, T>, Box<dyn std::ops::Deref<Target = T> + 'a>>,
+enum SharedReadLockInner<'a, T> {
+    RwLock(RwLockReadGuard<'a, T>),
+    Projection(Box<dyn std::ops::Deref<Target = T> + 'a>),
 }
 
-#[repr(transparent)]
+pub struct SharedReadLock<'a, T> {
+    inner: SharedReadLockInner<'a, T>,
+}
+
+pub enum SharedWriteLockInner<'a, T> {
+    RwLock(RwLockWriteGuard<'a, T>),
+    Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
+}
+
 pub struct SharedWriteLock<'a, T> {
-    lock: RawOrProjection<RwLockWriteGuard<'a, T>, Box<dyn std::ops::DerefMut<Target = T> + 'a>>,
+    inner: SharedWriteLockInner<'a, T>,
 }
 
 impl<'a, T> std::ops::Deref for SharedReadLock<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        use RawOrProjection::*;
-        match &self.lock {
-            Raw(x) => x,
+        use SharedReadLockInner::*;
+        match &self.inner {
+            RwLock(x) => x,
             Projection(x) => x,
         }
     }
@@ -106,9 +118,9 @@ impl<'a, T> std::ops::Deref for SharedReadLock<'a, T> {
 impl<'a, T> std::ops::Deref for SharedWriteLock<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        use RawOrProjection::*;
-        match &self.lock {
-            Raw(x) => x,
+        use SharedWriteLockInner::*;
+        match &self.inner {
+            RwLock(x) => x,
             Projection(x) => x,
         }
     }
@@ -116,9 +128,9 @@ impl<'a, T> std::ops::Deref for SharedWriteLock<'a, T> {
 
 impl<'a, T> std::ops::DerefMut for SharedWriteLock<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        use RawOrProjection::*;
-        match &mut self.lock {
-            Raw(x) => &mut *x,
+        use SharedWriteLockInner::*;
+        match &mut self.inner {
+            RwLock(x) => &mut *x,
             Projection(x) => &mut *x,
         }
     }
@@ -127,13 +139,13 @@ impl<'a, T> std::ops::DerefMut for SharedWriteLock<'a, T> {
 impl<T: Send + Sync> SharedRW<T> {
     pub fn new(t: T) -> SharedRW<T> {
         SharedRW {
-            inner: RawOrProjection::Raw(Arc::new(RwLock::new(t))),
+            inner: SharedRWImpl::RwLock(Arc::new(RwLock::new(t))),
         }
     }
 
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
         SharedRW {
-            inner: RawOrProjection::Raw(Arc::new(RwLock::new(t))),
+            inner: SharedRWImpl::RwLock(Arc::new(RwLock::new(t))),
         }
     }
 
@@ -146,7 +158,7 @@ impl<T: Send + Sync> SharedRW<T> {
     {
         let projectable = Arc::new((self.clone(), projector.into()));
         SharedRW {
-            inner: RawOrProjection::Projection(projectable),
+            inner: SharedRWImpl::Projection(projectable),
         }
     }
 
@@ -164,39 +176,39 @@ impl<T: Send + Sync> SharedRW<T> {
     {
         let projectable = Arc::new((self.clone(), ProjectorRW::new(ro, rw)));
         SharedRW {
-            inner: RawOrProjection::Projection(projectable),
+            inner: SharedRWImpl::Projection(projectable),
         }
     }
 
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self.inner {
-            RawOrProjection::Raw(lock) => {
+            SharedRWImpl::RwLock(lock) => {
                 let res = lock.read();
                 let lock = match res {
                     Ok(lock) => lock,
                     Err(err) => err.into_inner(),
                 };
                 SharedReadLock {
-                    lock: RawOrProjection::Raw(lock),
+                    inner: SharedReadLockInner::RwLock(lock),
                 }
             }
-            RawOrProjection::Projection(p) => p.lock_read(),
+            SharedRWImpl::Projection(p) => p.lock_read(),
         }
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self.inner {
-            RawOrProjection::Raw(lock) => {
+            SharedRWImpl::RwLock(lock) => {
                 let res = lock.write();
                 let lock = match res {
                     Ok(lock) => lock,
                     Err(err) => err.into_inner(),
                 };
                 SharedWriteLock {
-                    lock: RawOrProjection::Raw(lock),
+                    inner: SharedWriteLockInner::RwLock(lock),
                 }
             }
-            RawOrProjection::Projection(p) => p.lock_write(),
+            SharedRWImpl::Projection(p) => p.lock_write(),
         }
     }
 }
