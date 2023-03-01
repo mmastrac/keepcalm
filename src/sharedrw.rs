@@ -1,16 +1,13 @@
 use crate::projection::*;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::{sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard}};
 
-const POISON_POLICY_IGNORE: u8 = (PoisonPolicy::Ignore) as u8;
-const POISON_POLICY_PANIC: u8 = (PoisonPolicy::Panic) as u8;
-
-enum PoisonPolicy {
+pub enum PoisonPolicy {
     Ignore = 0,
     Panic = 1,
 }
 
 #[repr(transparent)]
-pub struct SharedRW<T: Send + Sync, const POISON_POLICY: u8 = { POISON_POLICY_PANIC }> {
+pub struct SharedRW<T: Send + Sync> {
     inner: RawOrProjection<Arc<RwLock<T>>, BoxedProjection<T>>,
 }
 
@@ -21,8 +18,8 @@ trait SharedRWProjection<T> {
     fn lock_write<'a>(&'a self) -> SharedWriteLock<'a, T>;
 }
 
-impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection<P>
-    for (SharedRW<T, POISON_POLICY>, ProjectorRW<T, P>)
+impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P>
+    for (SharedRW<T>, ProjectorRW<T, P>)
 {
     fn lock_read<'a>(&'a self) -> SharedReadLock<'a, P> {
         struct HiddenLock<'a, T, P> {
@@ -77,7 +74,7 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
     }
 }
 
-impl<T: Send + Sync, const POISON_POLICY: u8> Clone for SharedRW<T, POISON_POLICY> {
+impl<T: Send + Sync> Clone for SharedRW<T> {
     fn clone(&self) -> Self {
         Self {
             inner: self.inner.clone(),
@@ -128,18 +125,22 @@ impl<'a, T> std::ops::DerefMut for SharedWriteLock<'a, T> {
 }
 
 impl<T: Send + Sync> SharedRW<T> {
-    pub fn new(t: T) -> SharedRW<T, POISON_POLICY_PANIC> {
+    pub fn new(t: T) -> SharedRW<T> {
         SharedRW {
             inner: RawOrProjection::Raw(Arc::new(RwLock::new(t))),
         }
     }
-}
 
-impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
+    pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
+        SharedRW {
+            inner: RawOrProjection::Raw(Arc::new(RwLock::new(t))),
+        }
+    }
+
     pub fn project<P: Send + Sync + 'static, I: Into<ProjectorRW<T, P>>>(
         &self,
         projector: I,
-    ) -> SharedRW<P, POISON_POLICY>
+    ) -> SharedRW<P>
     where
         T: 'static,
     {
@@ -157,7 +158,7 @@ impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
         &self,
         ro: RO,
         rw: RW,
-    ) -> SharedRW<P, POISON_POLICY>
+    ) -> SharedRW<P>
     where
         T: 'static,
     {
