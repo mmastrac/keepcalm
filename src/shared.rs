@@ -84,9 +84,12 @@ impl<T: Send + Sync> Shared<T> {
 mod test {
     use super::*;
 
+    #[allow(unused)]
     fn ensure_send<T: Send>() {}
+    #[allow(unused)]
     fn ensure_sync<T: Sync>() {}
 
+    #[allow(unused)]
     fn test_types() {
         ensure_send::<Shared<usize>>();
         ensure_sync::<Shared<usize>>();
