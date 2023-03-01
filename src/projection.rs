@@ -1,5 +1,5 @@
 /// Given a type, projects a reference into that type as another type.
-pub trait ProjectR<A, B>: Send + Sync {
+pub trait ProjectR<A: ?Sized, B: ?Sized>: Send + Sync {
     fn project<'a>(&self, a: &'a A) -> &'a B;
 }
 
@@ -14,7 +14,7 @@ where
 }
 
 /// Given a type, projects a mutable reference into that type as another type.
-pub trait ProjectW<A, B>: Send + Sync {
+pub trait ProjectW<A: ?Sized, B: ?Sized>: Send + Sync {
     fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B;
 }
 
@@ -44,12 +44,12 @@ impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
 }
 
 /// Stores a read/write projection.
-pub struct ProjectorRW<A, B> {
+pub struct ProjectorRW<A: ?Sized, B: ?Sized> {
     pub ro: Box<dyn ProjectR<A, B>>,
     pub rw: Box<dyn ProjectW<A, B>>,
 }
 
-impl<A, B> ProjectorRW<A, B> {
+impl<A: ?Sized, B: ?Sized> ProjectorRW<A, B> {
     pub fn new(ro: impl ProjectR<A, B> + 'static, rw: impl ProjectW<A, B> + 'static) -> Self {
         Self {
             ro: Box::new(ro),
@@ -59,7 +59,7 @@ impl<A, B> ProjectorRW<A, B> {
 }
 
 /// Stores a read projection.
-pub struct Projector<A, B> {
+pub struct Projector<A: ?Sized, B: ?Sized> {
     pub ro: Box<dyn ProjectR<A, B>>,
 }
 

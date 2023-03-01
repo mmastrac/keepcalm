@@ -3,7 +3,7 @@ use serde::Serialize;
 use std::sync::Arc;
 
 #[repr(transparent)]
-pub struct Shared<T> {
+pub struct Shared<T: ?Sized> {
     inner: RawOrProjection<Arc<T>, Arc<Box<dyn SharedProjection<T> + Send + Sync>>>,
 }
 
@@ -27,8 +27,16 @@ impl<T> Clone for Shared<T> {
     }
 }
 
-trait SharedProjection<T> {
+trait SharedProjection<T: ?Sized> {
     fn read(&self) -> &T;
+}
+
+impl<T: ?Sized> From<Box<T>> for Shared<T> {
+    fn from(value: Box<T>) -> Self {
+        Self {
+            inner: RawOrProjection::Raw(Arc::from(value)),
+        }
+    }
 }
 
 impl<T: Send + Sync> Shared<T> {
@@ -45,7 +53,7 @@ impl<T: Send + Sync, P: Send + Sync> SharedProjection<P> for (Shared<T>, Arc<Pro
     }
 }
 
-impl<T> std::ops::Deref for Shared<T> {
+impl<T: ?Sized> std::ops::Deref for Shared<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         use RawOrProjection::*;
@@ -74,7 +82,15 @@ impl<T: Send + Sync> Shared<T> {
 
 #[cfg(test)]
 mod test {
-    use super::Shared;
+    use super::*;
+
+    fn ensure_send<T: Send>() {}
+    fn ensure_sync<T: Sync>() {}
+
+    fn test_types() {
+        ensure_send::<Shared<usize>>();
+        ensure_sync::<Shared<usize>>();
+    }
 
     #[test]
     pub fn test_shared() {
@@ -89,5 +105,12 @@ mod test {
         assert_eq!(*shared_proj, 1);
         let shared_proj = shared.project_fn(|x| &x.1);
         assert_eq!(*shared_proj, 2);
+    }
+
+    #[test]
+    pub fn test_unsized() {
+        let boxed = Box::new("123".to_owned()) as Box<dyn AsRef<str>>;
+        let shared: Shared<dyn AsRef<str>> = Shared::from(boxed);
+        assert_eq!(shared.as_ref(), "123");
     }
 }
