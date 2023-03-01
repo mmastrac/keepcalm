@@ -1,13 +1,37 @@
 use crate::projection::*;
-use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+#[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PoisonPolicy {
-    Ignore = 0,
-    Panic = 1,
+    Ignore,
+    Panic,
+}
+
+impl PoisonPolicy {
+    fn handle<T>(&self, error: PoisonError<T>) -> T {
+        match self {
+            PoisonPolicy::Ignore => error.into_inner(),
+            PoisonPolicy::Panic => panic!("This shared object was poisoned"),
+        }
+    }
+
+    fn handle_lock<T>(&self, res: Result<T, PoisonError<T>>) -> T {
+        match res {
+            Ok(lock) => lock,
+            Err(err) => self.handle(err),
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Implementation {
+    RwLock,
+    Mutex,
 }
 
 enum SharedRWImpl<T> {
-    RwLock(Arc<RwLock<T>>),
+    RwLock(PoisonPolicy, Arc<RwLock<T>>),
+    Mutex(PoisonPolicy, Arc<Mutex<T>>),
     Projection(Arc<dyn SharedRWProjection<T> + Send + Sync>),
 }
 
@@ -79,7 +103,8 @@ impl<T: Send + Sync> Clone for SharedRW<T> {
     fn clone(&self) -> Self {
         Self {
             inner: match &self.inner {
-                SharedRWImpl::RwLock(x) => SharedRWImpl::RwLock(x.clone()),
+                SharedRWImpl::RwLock(policy, x) => SharedRWImpl::RwLock(*policy, x.clone()),
+                SharedRWImpl::Mutex(policy, x) => SharedRWImpl::Mutex(*policy, x.clone()),
                 SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
             },
         }
@@ -88,6 +113,7 @@ impl<T: Send + Sync> Clone for SharedRW<T> {
 
 enum SharedReadLockInner<'a, T> {
     RwLock(RwLockReadGuard<'a, T>),
+    Mutex(MutexGuard<'a, T>),
     Projection(Box<dyn std::ops::Deref<Target = T> + 'a>),
 }
 
@@ -97,6 +123,7 @@ pub struct SharedReadLock<'a, T> {
 
 pub enum SharedWriteLockInner<'a, T> {
     RwLock(RwLockWriteGuard<'a, T>),
+    Mutex(MutexGuard<'a, T>),
     Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
 }
 
@@ -110,6 +137,7 @@ impl<'a, T> std::ops::Deref for SharedReadLock<'a, T> {
         use SharedReadLockInner::*;
         match &self.inner {
             RwLock(x) => x,
+            Mutex(x) => x,
             Projection(x) => x,
         }
     }
@@ -121,6 +149,7 @@ impl<'a, T> std::ops::Deref for SharedWriteLock<'a, T> {
         use SharedWriteLockInner::*;
         match &self.inner {
             RwLock(x) => x,
+            Mutex(x) => x,
             Projection(x) => x,
         }
     }
@@ -131,6 +160,7 @@ impl<'a, T> std::ops::DerefMut for SharedWriteLock<'a, T> {
         use SharedWriteLockInner::*;
         match &mut self.inner {
             RwLock(x) => &mut *x,
+            Mutex(x) => &mut *x,
             Projection(x) => &mut *x,
         }
     }
@@ -139,13 +169,24 @@ impl<'a, T> std::ops::DerefMut for SharedWriteLock<'a, T> {
 impl<T: Send + Sync> SharedRW<T> {
     pub fn new(t: T) -> SharedRW<T> {
         SharedRW {
-            inner: SharedRWImpl::RwLock(Arc::new(RwLock::new(t))),
+            inner: SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t))),
+        }
+    }
+
+    pub fn new_with_type(t: T, implementation: Implementation) -> Self {
+        match implementation {
+            Implementation::Mutex => Self {
+                inner: SharedRWImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t))),
+            },
+            Implementation::RwLock => Self {
+                inner: SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t))),
+            },
         }
     }
 
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
         SharedRW {
-            inner: SharedRWImpl::RwLock(Arc::new(RwLock::new(t))),
+            inner: SharedRWImpl::RwLock(policy, Arc::new(RwLock::new(t))),
         }
     }
 
@@ -182,32 +223,24 @@ impl<T: Send + Sync> SharedRW<T> {
 
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self.inner {
-            SharedRWImpl::RwLock(lock) => {
-                let res = lock.read();
-                let lock = match res {
-                    Ok(lock) => lock,
-                    Err(err) => err.into_inner(),
-                };
-                SharedReadLock {
-                    inner: SharedReadLockInner::RwLock(lock),
-                }
-            }
+            SharedRWImpl::RwLock(policy, lock) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),
+            },
+            SharedRWImpl::Mutex(policy, lock) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(policy.handle_lock(lock.lock())),
+            },
             SharedRWImpl::Projection(p) => p.lock_read(),
         }
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self.inner {
-            SharedRWImpl::RwLock(lock) => {
-                let res = lock.write();
-                let lock = match res {
-                    Ok(lock) => lock,
-                    Err(err) => err.into_inner(),
-                };
-                SharedWriteLock {
-                    inner: SharedWriteLockInner::RwLock(lock),
-                }
-            }
+            SharedRWImpl::RwLock(policy, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::RwLock(policy.handle_lock(lock.write())),
+            },
+            SharedRWImpl::Mutex(policy, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::Mutex(policy.handle_lock(lock.lock())),
+            },
             SharedRWImpl::Projection(p) => p.lock_write(),
         }
     }
@@ -215,11 +248,18 @@ impl<T: Send + Sync> SharedRW<T> {
 
 #[cfg(test)]
 mod test {
-    use super::SharedRW;
+    use super::{SharedRW, Implementation};
 
     #[test]
     pub fn test_shared_rw() {
         let shared = SharedRW::new(1);
+        *shared.lock_write() += 1;
+        assert_eq!(*shared.lock_read(), 2);
+    }
+
+    #[test]
+    pub fn test_shared_rw_mutex() {
+        let shared = SharedRW::new_with_type(1, Implementation::Mutex);
         *shared.lock_write() += 1;
         assert_eq!(*shared.lock_read(), 2);
     }
