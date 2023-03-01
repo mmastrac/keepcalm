@@ -1,4 +1,4 @@
-use crate::projection::{Projector, RawOrProjection};
+use crate::projection::{ProjectR, Projector, RawOrProjection};
 use serde::Serialize;
 use std::sync::Arc;
 
@@ -41,7 +41,7 @@ impl<T: Send + Sync> Shared<T> {
 
 impl<T: Send + Sync, P: Send + Sync> SharedProjection<P> for (Shared<T>, Arc<Projector<T, P>>) {
     fn read<'a>(&'a self) -> &'a P {
-        (self.1.ro)(&*self.0)
+        (self.1.ro).project(&*self.0)
     }
 }
 
