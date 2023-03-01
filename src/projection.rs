@@ -3,7 +3,7 @@ pub trait ProjectR<A: ?Sized, B: ?Sized>: Send + Sync {
     fn project<'a>(&self, a: &'a A) -> &'a B;
 }
 
-impl<A, B, T> ProjectR<A, B> for T
+impl<A: ?Sized, B: ?Sized, T> ProjectR<A, B> for T
 where
     Self: Send + Sync,
     T: Fn(&A) -> &B,
@@ -18,7 +18,7 @@ pub trait ProjectW<A: ?Sized, B: ?Sized>: Send + Sync {
     fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B;
 }
 
-impl<A, B, T> ProjectW<A, B> for T
+impl<A: ?Sized, B: ?Sized, T> ProjectW<A, B> for T
 where
     Self: Send + Sync,
     T: Fn(&mut A) -> &mut B,
@@ -63,14 +63,14 @@ pub struct Projector<A: ?Sized, B: ?Sized> {
     pub ro: Box<dyn ProjectR<A, B>>,
 }
 
-impl<A, B> Projector<A, B> {
+impl<A: ?Sized, B: ?Sized> Projector<A, B> {
     pub fn new(ro: impl ProjectR<A, B> + 'static) -> Self {
         Self { ro: Box::new(ro) }
     }
 }
 
 /// Extract the [`Projector`] from a [`ProjectorRW`].
-impl<A, B> From<ProjectorRW<A, B>> for Projector<A, B> {
+impl<A: ?Sized, B: ?Sized> From<ProjectorRW<A, B>> for Projector<A, B> {
     fn from(value: ProjectorRW<A, B>) -> Self {
         Self { ro: value.ro }
     }
