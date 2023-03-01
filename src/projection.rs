@@ -13,7 +13,17 @@ where
 }
 
 pub trait ProjectW<A, B>: Send + Sync {
-    fn project_mut(&self, a: &mut A) -> &mut B;
+    fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B;
+}
+
+impl<A, B, T> ProjectW<A, B> for T
+where
+    Self: Send + Sync,
+    T: Fn(&mut A) -> &mut B,
+{
+    fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B {
+        self(a)
+    }
 }
 
 pub enum RawOrProjection<L, P> {
@@ -33,18 +43,12 @@ impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
 
 /// Stores a read/write projection as two boxes.
 pub struct ProjectorRW<A, B> {
-    pub ro: Box<(dyn Fn(&A) -> &B + Send + Sync)>,
-    pub rw: Box<(dyn Fn(&mut A) -> &mut B + Send + Sync)>,
+    pub ro: Box<dyn ProjectR<A, B>>,
+    pub rw: Box<dyn ProjectW<A, B>>,
 }
 
 impl<A, B> ProjectorRW<A, B> {
-    pub fn new<
-        RO: (Fn(&A) -> &B) + Send + Sync + 'static,
-        RW: (Fn(&mut A) -> &mut B) + Send + Sync + 'static,
-    >(
-        ro: RO,
-        rw: RW,
-    ) -> Self {
+    pub fn new(ro: impl ProjectR<A, B> + 'static, rw: impl ProjectW<A, B> + 'static) -> Self {
         Self {
             ro: Box::new(ro),
             rw: Box::new(rw),
@@ -54,7 +58,7 @@ impl<A, B> ProjectorRW<A, B> {
 
 /// Stores a read/write projection as two boxes.
 pub struct Projector<A, B> {
-    pub ro: Box<(dyn ProjectR<A, B>)>,
+    pub ro: Box<dyn ProjectR<A, B>>,
 }
 
 impl<A, B> Projector<A, B> {

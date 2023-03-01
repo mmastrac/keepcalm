@@ -33,7 +33,7 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
         impl<'a, T, P> std::ops::Deref for HiddenLock<'a, T, P> {
             type Target = P;
             fn deref(&self) -> &Self::Target {
-                (self.projector.ro)(&*self.lock)
+                (self.projector.ro).project(&*self.lock)
             }
         }
 
@@ -56,13 +56,13 @@ impl<T: Send + Sync, P: Send + Sync, const POISON_POLICY: u8> SharedRWProjection
         impl<'a, T, P> std::ops::Deref for HiddenLock<'a, T, P> {
             type Target = P;
             fn deref(&self) -> &Self::Target {
-                (self.projector.ro)(&*self.lock)
+                (self.projector.ro).project(&*self.lock)
             }
         }
 
         impl<'a, T, P> std::ops::DerefMut for HiddenLock<'a, T, P> {
             fn deref_mut(&mut self) -> &mut Self::Target {
-                (self.projector.rw)(&mut *self.lock)
+                (self.projector.rw).project_mut(&mut *self.lock)
             }
         }
 
