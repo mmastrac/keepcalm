@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 pub enum RawOrProjection<L, P> {
     Lock(L),
     Projection(P),

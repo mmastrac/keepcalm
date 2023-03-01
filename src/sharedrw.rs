@@ -11,8 +11,10 @@ enum PoisonPolicy {
 
 #[repr(transparent)]
 pub struct SharedRW<T: Send + Sync, const POISON_POLICY: u8 = { POISON_POLICY_PANIC }> {
-    inner: RawOrProjection<Arc<RwLock<T>>, Arc<Box<dyn SharedRWProjection<T> + Send + Sync>>>,
+    inner: RawOrProjection<Arc<RwLock<T>>, BoxedProjection<T>>,
 }
+
+type BoxedProjection<T> = Arc<dyn SharedRWProjection<T> + Send + Sync>;
 
 trait SharedRWProjection<T> {
     fn lock_read<'a>(&'a self) -> SharedReadLock<'a, T>;
@@ -98,8 +100,8 @@ impl<'a, T> std::ops::Deref for SharedReadLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use RawOrProjection::*;
         match &self.lock {
-            Lock(x) => &*x,
-            Projection(x) => &*x,
+            Lock(x) => x,
+            Projection(x) => x,
         }
     }
 }
@@ -109,8 +111,8 @@ impl<'a, T> std::ops::Deref for SharedWriteLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use RawOrProjection::*;
         match &self.lock {
-            Lock(x) => &*x,
-            Projection(x) => &*x,
+            Lock(x) => x,
+            Projection(x) => x,
         }
     }
 }
@@ -142,9 +144,9 @@ impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
         T: 'static,
     {
         let projectable = (self.clone(), projector.into());
-        let projectable: Box<dyn SharedRWProjection<P> + Send + Sync> = Box::new(projectable);
+        let projectable = Arc::new(projectable);
         SharedRW {
-            inner: RawOrProjection::Projection(Arc::new(projectable)),
+            inner: RawOrProjection::Projection(projectable),
         }
     }
 
@@ -161,9 +163,9 @@ impl<T: Send + Sync, const POISON_POLICY: u8> SharedRW<T, POISON_POLICY> {
         T: 'static,
     {
         let projectable = (self.clone(), Arc::new(ProjectorRW::new(ro, rw)));
-        let projectable: Box<dyn SharedRWProjection<P> + Send + Sync> = Box::new(projectable);
+        let projectable = Arc::new(projectable);
         SharedRW {
-            inner: RawOrProjection::Projection(Arc::new(projectable)),
+            inner: RawOrProjection::Projection(projectable),
         }
     }
 

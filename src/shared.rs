@@ -50,7 +50,7 @@ impl<T> std::ops::Deref for Shared<T> {
     fn deref(&self) -> &Self::Target {
         use RawOrProjection::*;
         match &self.inner {
-            Lock(x) => &*x,
+            Lock(x) => x,
             Projection(x) => x.read(),
         }
     }
