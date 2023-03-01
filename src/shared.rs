@@ -34,7 +34,7 @@ trait SharedProjection<T> {
 impl<T: Send + Sync> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
-            inner: RawOrProjection::Lock(Arc::new(t)),
+            inner: RawOrProjection::Raw(Arc::new(t)),
         }
     }
 }
@@ -50,7 +50,7 @@ impl<T> std::ops::Deref for Shared<T> {
     fn deref(&self) -> &Self::Target {
         use RawOrProjection::*;
         match &self.inner {
-            Lock(x) => x,
+            Raw(x) => x,
             Projection(x) => x.read(),
         }
     }

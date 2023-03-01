@@ -27,7 +27,7 @@ where
 }
 
 pub enum RawOrProjection<L, P> {
-    Lock(L),
+    Raw(L),
     Projection(P),
 }
 
@@ -35,7 +35,7 @@ impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
     fn clone(&self) -> Self {
         use RawOrProjection::*;
         match self {
-            Lock(x) => Lock(x.clone()),
+            Raw(x) => Raw(x.clone()),
             Projection(x) => Projection(x.clone()),
         }
     }
@@ -56,7 +56,7 @@ impl<A, B> ProjectorRW<A, B> {
     }
 }
 
-/// Stores a read/write projection as two boxes.
+/// Stores a read projection as one box.
 pub struct Projector<A, B> {
     pub ro: Box<dyn ProjectR<A, B>>,
 }
