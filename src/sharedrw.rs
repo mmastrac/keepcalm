@@ -41,12 +41,12 @@ pub struct SharedRW<T: Send + Sync> {
 }
 
 trait SharedRWProjection<T> {
-    fn lock_read<'a>(&'a self) -> SharedReadLock<'a, T>;
-    fn lock_write<'a>(&'a self) -> SharedWriteLock<'a, T>;
+    fn lock_read(&self) -> SharedReadLock<T>;
+    fn lock_write(&self) -> SharedWriteLock<T>;
 }
 
 impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T, P>) {
-    fn lock_read<'a>(&'a self) -> SharedReadLock<'a, P> {
+    fn lock_read(&self) -> SharedReadLock<P> {
         struct HiddenLock<'a, T, P> {
             lock: SharedReadLock<'a, T>,
             projector: &'a ProjectorRW<T, P>,
@@ -69,7 +69,7 @@ impl<T: Send + Sync, P: Send + Sync> SharedRWProjection<P> for (SharedRW<T>, Pro
         }
     }
 
-    fn lock_write<'a>(&'a self) -> SharedWriteLock<'a, P> {
+    fn lock_write(&self) -> SharedWriteLock<P> {
         struct HiddenLock<'a, T, P> {
             lock: SharedWriteLock<'a, T>,
             projector: &'a ProjectorRW<T, P>,

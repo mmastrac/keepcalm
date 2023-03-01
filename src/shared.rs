@@ -28,7 +28,7 @@ impl<T> Clone for Shared<T> {
 }
 
 trait SharedProjection<T> {
-    fn read<'a>(&'a self) -> &'a T;
+    fn read(&self) -> &T;
 }
 
 impl<T: Send + Sync> Shared<T> {
@@ -40,7 +40,7 @@ impl<T: Send + Sync> Shared<T> {
 }
 
 impl<T: Send + Sync, P: Send + Sync> SharedProjection<P> for (Shared<T>, Arc<Projector<T, P>>) {
-    fn read<'a>(&'a self) -> &'a P {
+    fn read(&self) -> &P {
         (self.1.ro).project(&*self.0)
     }
 }
