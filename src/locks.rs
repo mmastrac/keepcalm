@@ -1,9 +1,15 @@
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
+    /// A read "lock" that's just a plain reference.
+    Arc(&'a T),
+    /// RwLock's read lock.
     RwLock(RwLockReadGuard<'a, T>),
+    /// RwLock's read lock, but for a Box.
     RwLockBox(RwLockReadGuard<'a, Box<T>>),
+    /// Mutex's read lock.
     Mutex(MutexGuard<'a, T>),
+    /// A projected lock.
     Projection(Box<dyn std::ops::Deref<Target = T> + 'a>),
 }
 
@@ -27,6 +33,7 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedReadLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use SharedReadLockInner::*;
         match &self.inner {
+            Arc(x) => x,
             RwLock(x) => x,
             RwLockBox(x) => x,
             Mutex(x) => x,
