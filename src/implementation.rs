@@ -92,7 +92,7 @@ impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self {
             SharedImpl::Arc(x) => SharedReadLock {
-                inner: SharedReadLockInner::Arc(&x),
+                inner: SharedReadLockInner::Arc(x),
             },
             SharedImpl::RwLock(policy, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),

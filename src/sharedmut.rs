@@ -234,7 +234,7 @@ impl<T: ?Sized> SharedMut<T> {
     /// Consume and transmutate this [`SharedMut`] into a [`Shared`]. The underlying lock may be optimized if
     /// there are no other outstanding writeable references.
     pub fn shared(self) -> Shared<T> {
-        Shared::from(self.inner_impl.clone())
+        Shared::from(self.inner_impl)
     }
 
     pub fn read(&self) -> SharedReadLock<T> {
