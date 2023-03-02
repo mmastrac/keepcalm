@@ -1,5 +1,9 @@
 # Keep Calm (and call Clone)
 
+![Build Status](https://github.com/mmastrac/keepcalm/actions/workflows/rust.yml/badge.svg)
+[![docs.rs](https://docs.rs/keepcalm/badge.svg)](https://docs.rs/keepcalm)
+[![crates.io](https://img.shields.io/crates/v/keepcalm.svg)](https://crates.io/crates/keepcalm)
+
 Simple shared types for multi-threaded programs.
 
 This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers. The
