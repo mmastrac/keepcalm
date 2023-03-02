@@ -1,17 +1,17 @@
-use crate::implementation::{SharedProjection, SharedRWImpl};
+use crate::implementation::{SharedProjection, SharedMutImpl};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
-use crate::SharedRW;
+use crate::SharedMut;
 use std::sync::Arc;
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
 pub struct Shared<T: ?Sized> {
-    inner: SharedRWImpl<T>,
+    inner: SharedMutImpl<T>,
 }
 
 // UNSAFETY: The construction and projection of Shared requires Send + Sync, so we can guarantee that
-// all instances of SharedRWImpl are Send + Sync.
+// all instances of SharedMutImpl are Send + Sync.
 unsafe impl<T: ?Sized> Send for Shared<T> {}
 unsafe impl<T: ?Sized> Sync for Shared<T> {}
 
@@ -51,21 +51,21 @@ where
 {
     fn from(value: Box<T>) -> Self {
         Self {
-            inner: SharedRWImpl::Arc(Arc::from(value)),
+            inner: SharedMutImpl::Arc(Arc::from(value)),
         }
     }
 }
 
-// Use for transmutation from SharedRW to Shared.
-impl<T: ?Sized> From<SharedRWImpl<T>> for Shared<T> {
-    fn from(inner: SharedRWImpl<T>) -> Self {
+// Use for transmutation from SharedMut to Shared.
+impl<T: ?Sized> From<SharedMutImpl<T>> for Shared<T> {
+    fn from(inner: SharedMutImpl<T>) -> Self {
         Self { inner }
     }
 }
 
-// Use for transmutation from SharedRW to Shared.
-impl<T: ?Sized> From<SharedRW<T>> for Shared<T> {
-    fn from(shared_rw: SharedRW<T>) -> Self {
+// Use for transmutation from SharedMut to Shared.
+impl<T: ?Sized> From<SharedMut<T>> for Shared<T> {
+    fn from(shared_rw: SharedMut<T>) -> Self {
         Self {
             inner: shared_rw.inner_impl,
         }
@@ -78,7 +78,7 @@ impl<T: ?Sized> Shared<T> {
         Box<T>: Send + Sync,
     {
         Self {
-            inner: SharedRWImpl::Arc(Arc::from(t)),
+            inner: SharedMutImpl::Arc(Arc::from(t)),
         }
     }
 }
@@ -86,7 +86,7 @@ impl<T: ?Sized> Shared<T> {
 impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
-            inner: SharedRWImpl::Arc(Arc::new(t)),
+            inner: SharedMutImpl::Arc(Arc::new(t)),
         }
     }
 
@@ -132,7 +132,7 @@ impl<T: ?Sized> Shared<T> {
         let projector: Projector<T, P> = projector.into();
         let projectable = Arc::new((self.clone(), Arc::new(projector)));
         Shared {
-            inner: SharedRWImpl::ProjectionRO(projectable),
+            inner: SharedMutImpl::ProjectionRO(projectable),
         }
     }
 
@@ -145,7 +145,7 @@ impl<T: ?Sized> Shared<T> {
     {
         let projectable = Arc::new((self.clone(), Arc::new(Projector::new(ro))));
         Shared {
-            inner: SharedRWImpl::ProjectionRO(projectable),
+            inner: SharedMutImpl::ProjectionRO(projectable),
         }
     }
 

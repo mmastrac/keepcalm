@@ -4,9 +4,9 @@ mod implementation;
 mod locks;
 mod projection;
 mod shared;
-mod sharedrw;
+mod sharedmut;
 
 pub use implementation::PoisonPolicy;
 pub use projection::{Projector, ProjectorRW};
 pub use shared::Shared;
-pub use sharedrw::{Implementation, SharedRW};
+pub use sharedmut::{Implementation, SharedMut};
