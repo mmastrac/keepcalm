@@ -26,7 +26,7 @@ where
     where
         S: serde::Serializer,
     {
-        (**self).serialize(serializer)
+        self.read().serialize(serializer)
     }
 }
 
