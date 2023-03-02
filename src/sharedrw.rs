@@ -1,5 +1,6 @@
-use crate::projection::*;
 use crate::locks::*;
+use crate::projection::*;
+use crate::Shared;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// Determines what should happen if the underlying synchronization primitive is poisoned.
@@ -33,6 +34,8 @@ pub enum Implementation {
 }
 
 enum SharedRWImpl<T: ?Sized> {
+    /// Only usable by non-mutable shares.
+    Arc(Arc<T>),
     RwLock(PoisonPolicy, Arc<RwLock<T>>),
     /// Used for unsized types
     RwLockBox(PoisonPolicy, Arc<RwLock<Box<T>>>),
@@ -101,6 +104,7 @@ impl<T: ?Sized> Clone for SharedRW<T> {
     fn clone(&self) -> Self {
         Self {
             inner_impl: match &self.inner_impl {
+                SharedRWImpl::Arc(x) => SharedRWImpl::Arc(x.clone()),
                 SharedRWImpl::RwLock(policy, x) => SharedRWImpl::RwLock(*policy, x.clone()),
                 SharedRWImpl::RwLockBox(policy, x) => SharedRWImpl::RwLockBox(*policy, x.clone()),
                 SharedRWImpl::Mutex(policy, x) => SharedRWImpl::Mutex(*policy, x.clone()),
@@ -113,11 +117,73 @@ impl<T: ?Sized> Clone for SharedRW<T> {
 impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedRWImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            SharedRWImpl::Arc(x) => x.fmt(f),
             SharedRWImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             SharedRWImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             SharedRWImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             // TODO: We should format the underlying projection
             SharedRWImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
+        }
+    }
+}
+
+impl<T> SharedRWImpl<T> {
+    /// Attempt to unwrap this synchronized object if we are the only holder of its value.
+    fn try_unwrap(self) -> Result<T, Self> {
+        match self {
+            SharedRWImpl::Arc(x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(x),
+                Err(x) => Err(SharedRWImpl::Arc(x)),
+            },
+            SharedRWImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
+                Err(x) => Err(SharedRWImpl::Mutex(policy, x)),
+            },
+            SharedRWImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
+                Err(x) => Err(SharedRWImpl::RwLock(policy, x)),
+            },
+            SharedRWImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(*policy.handle_lock(x.into_inner())),
+                Err(x) => Err(SharedRWImpl::RwLockBox(policy, x)),
+            },
+            SharedRWImpl::Projection(_) => Err(self),
+        }
+    }
+}
+
+impl<T: ?Sized> SharedRWImpl<T> {
+    pub fn lock_read(&self) -> SharedReadLock<T> {
+        match &self {
+            SharedRWImpl::Arc(x) => SharedReadLock {
+                inner: SharedReadLockInner::Arc(&x),
+            },
+            SharedRWImpl::RwLock(policy, lock) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),
+            },
+            SharedRWImpl::RwLockBox(policy, lock) => SharedReadLock {
+                inner: SharedReadLockInner::RwLockBox(policy.handle_lock(lock.read())),
+            },
+            SharedRWImpl::Mutex(policy, lock) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(policy.handle_lock(lock.lock())),
+            },
+            SharedRWImpl::Projection(p) => p.lock_read(),
+        }
+    }
+
+    pub fn lock_write(&self) -> SharedWriteLock<T> {
+        match &self {
+            SharedRWImpl::Arc(x) => unreachable!("This should not be possible"),
+            SharedRWImpl::RwLock(policy, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::RwLock(policy.handle_lock(lock.write())),
+            },
+            SharedRWImpl::RwLockBox(policy, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::RwLockBox(policy.handle_lock(lock.write())),
+            },
+            SharedRWImpl::Mutex(policy, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::Mutex(policy.handle_lock(lock.lock())),
+            },
+            SharedRWImpl::Projection(p) => p.lock_write(),
         }
     }
 }
@@ -242,24 +308,9 @@ impl<T: Send + Sync + 'static> SharedRW<T> {
 
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
-        match self.inner_impl {
-            SharedRWImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
-                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::Mutex(policy, x))),
-            },
-            SharedRWImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
-                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(
-                    policy, x,
-                ))),
-            },
-            SharedRWImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(*policy.handle_lock(x.into_inner())),
-                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::RwLockBox(
-                    policy, x,
-                ))),
-            },
-            SharedRWImpl::Projection(_) => Err(self),
+        match self.inner_impl.try_unwrap() {
+            Ok(x) => Ok(x),
+            Err(x) => Err(make_shared_rw_value::<T, T>(x)),
         }
     }
 }
@@ -293,33 +344,11 @@ impl<T: ?Sized> SharedRW<T> {
     }
 
     pub fn lock_read(&self) -> SharedReadLock<T> {
-        match &self.inner_impl {
-            SharedRWImpl::RwLock(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),
-            },
-            SharedRWImpl::RwLockBox(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLockBox(policy.handle_lock(lock.read())),
-            },
-            SharedRWImpl::Mutex(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.handle_lock(lock.lock())),
-            },
-            SharedRWImpl::Projection(p) => p.lock_read(),
-        }
+        self.inner_impl.lock_read()
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
-        match &self.inner_impl {
-            SharedRWImpl::RwLock(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(policy.handle_lock(lock.write())),
-            },
-            SharedRWImpl::RwLockBox(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLockBox(policy.handle_lock(lock.write())),
-            },
-            SharedRWImpl::Mutex(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(policy.handle_lock(lock.lock())),
-            },
-            SharedRWImpl::Projection(p) => p.lock_write(),
-        }
+        self.inner_impl.lock_write()
     }
 }
 

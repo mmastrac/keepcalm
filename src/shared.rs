@@ -1,5 +1,5 @@
 use crate::projection::{Projector, RawOrProjection};
-use std::{sync::Arc, ops::Deref};
+use std::{ops::Deref, sync::Arc};
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
@@ -80,9 +80,11 @@ impl<T: Send + Sync + 'static> Shared<T> {
         match self.inner {
             RawOrProjection::Raw(x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(x),
-                Err(x) => Err(Self { inner: RawOrProjection::Raw(x) }),
+                Err(x) => Err(Self {
+                    inner: RawOrProjection::Raw(x),
+                }),
             },
-            inner @ RawOrProjection::Projection(_) => { Err(Self { inner }) },
+            inner @ RawOrProjection::Projection(_) => Err(Self { inner }),
         }
     }
 }
