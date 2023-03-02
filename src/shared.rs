@@ -58,7 +58,7 @@ impl<T: ?Sized> Shared<T> {
     }
 }
 
-impl<T: Send + Sync> Shared<T> {
+impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
             inner: RawOrProjection::Raw(Arc::new(t)),

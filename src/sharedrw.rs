@@ -48,7 +48,7 @@ unsafe impl<T: ?Sized> Send for SharedRW<T> {}
 unsafe impl<T: ?Sized> Sync for SharedRW<T> {}
 
 // UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedRW from a non-Send/non-Sync type.
-fn make_shared_rw_value<U: Send + Sync, T: ?Sized>(inner_impl: SharedRWImpl<T>) -> SharedRW<T> {
+fn make_shared_rw_value<U: Send + Sync, T: ?Sized + 'static>(inner_impl: SharedRWImpl<T>) -> SharedRW<T> {
     SharedRW { inner_impl }
 }
 
@@ -74,7 +74,7 @@ impl<T: ?Sized> Clone for SharedRW<T> {
 impl<T: ?Sized> SharedRW<T> {
     pub fn from_box(value: Box<T>) -> Self
     where
-        Box<T>: Send + Sync,
+        Box<T>: Send + Sync + 'static,
     {
         make_shared_rw_value::<Box<T>, T>(SharedRWImpl::RwLockBox(
             PoisonPolicy::Panic,
@@ -204,7 +204,7 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
 
 // UNSAFETY: All construction functions are gated behind T: Send + Sync to ensure that we cannot
 // construct a SharedRW without the underlying object being thread-safe.
-impl<T: Send + Sync> SharedRW<T> {
+impl<T: Send + Sync + 'static> SharedRW<T> {
     pub fn new(t: T) -> SharedRW<T> {
         make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(
             PoisonPolicy::Panic,
