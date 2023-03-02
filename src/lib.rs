@@ -3,6 +3,7 @@
 mod projection;
 mod shared;
 mod sharedrw;
+mod locks;
 
 pub use projection::{Projector, ProjectorRW};
 pub use shared::Shared;
