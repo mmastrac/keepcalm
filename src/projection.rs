@@ -89,13 +89,13 @@ impl<A: ?Sized, B: ?Sized> From<ProjectorRW<A, B>> for Projector<A, B> {
 }
 
 /// Project part of a type as another type.
-/// 
+///
 /// ```rust
 /// # use keepcalm::*;
 /// // Creates two projections for each field of a tuple:
 /// let projection0 = project!(x: (i32, i32), x.0);
 /// let projection1 = project!(x: (i32, i32), x.1);
-/// 
+///
 /// assert_eq!(1, *projection0.project(&(1, 2)));
 /// assert_eq!(2, *projection1.project(&(1, 2)));
 /// ```
@@ -116,11 +116,11 @@ macro_rules! project {
 }
 
 /// Projects a type as another type.
-/// 
+///
 /// ```rust
 /// # use keepcalm::*;
 /// let projection = project_cast!(x: [i32; 3] => dyn std::ops::IndexMut<usize, Output = i32>);
-/// 
+///
 /// let mut x = [1, 2, 3];
 /// projection.project_mut(&mut x)[0] += 10;
 /// assert_eq!(projection.project(&x)[0], 11);
@@ -135,7 +135,10 @@ macro_rules! project_cast {
         ) -> $crate::ProjectorRW<A, B> {
             $crate::ProjectorRW::new(a, b)
         }
-        make_projection(|$x: &$type| $x as &$type2, |$x: &mut $type| $x as &mut $type2)
+        make_projection(
+            |$x: &$type| $x as &$type2,
+            |$x: &mut $type| $x as &mut $type2,
+        )
     }};
 }
 
@@ -152,9 +155,13 @@ mod test {
 
     #[test]
     fn test_projection_cast() {
-        let x: String = "123".into();
-        let projection = project_cast!(x: String => (dyn AsRef<str>));
-        assert_eq!(projection.ro.project(&x).as_ref(), "123");
+        trait AsRefMut<T: ?Sized>: AsRef<T> + AsMut<T> {}
+        impl AsRefMut<str> for String {}
+
+        let mut x: String = "123".into();
+        let projection = project_cast!(x: String => (dyn AsRefMut<str>));
+        assert_eq!(projection.project(&x).as_ref(), "123");
+        assert_eq!(projection.project_mut(&mut x).as_mut(), "123");
     }
 
     #[test]
