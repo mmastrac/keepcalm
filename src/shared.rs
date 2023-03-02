@@ -1,6 +1,7 @@
 use crate::implementation::{SharedProjection, SharedRWImpl};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
+use crate::SharedRW;
 use std::sync::Arc;
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
@@ -51,6 +52,22 @@ where
     fn from(value: Box<T>) -> Self {
         Self {
             inner: SharedRWImpl::Arc(Arc::from(value)),
+        }
+    }
+}
+
+// Use for transmutation from SharedRW to Shared.
+impl<T: ?Sized> From<SharedRWImpl<T>> for Shared<T> {
+    fn from(inner: SharedRWImpl<T>) -> Self {
+        Self { inner }
+    }
+}
+
+// Use for transmutation from SharedRW to Shared.
+impl<T: ?Sized> From<SharedRW<T>> for Shared<T> {
+    fn from(shared_rw: SharedRW<T>) -> Self {
+        Self {
+            inner: shared_rw.inner_impl,
         }
     }
 }

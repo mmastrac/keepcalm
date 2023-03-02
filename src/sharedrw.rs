@@ -1,6 +1,7 @@
 use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
+use crate::Shared;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// Specifies the underlying synchronization primitive.
@@ -46,7 +47,7 @@ pub enum Implementation {
 /// ```
 #[repr(transparent)]
 pub struct SharedRW<T: ?Sized> {
-    inner_impl: SharedRWImpl<T>,
+    pub(crate) inner_impl: SharedRWImpl<T>,
 }
 
 // UNSAFETY: The construction and projection of SharedRW requires Send + Sync, so we can guarantee that
@@ -223,6 +224,10 @@ impl<T: ?Sized> SharedRW<T> {
     {
         let projectable = Arc::new((self.clone(), ProjectorRW::new(ro, rw)));
         make_shared_rw_projection(SharedRWImpl::Projection(projectable))
+    }
+
+    pub fn shared(&self) -> Shared<T> {
+        Shared::from(self.inner_impl.clone())
     }
 
     pub fn read(&self) -> SharedReadLock<T> {
