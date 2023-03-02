@@ -34,8 +34,13 @@ enum SharedRWImpl<T: ?Sized> {
     /// Used for unsized types
     RwLockBox(PoisonPolicy, Arc<RwLock<Box<T>>>),
     Mutex(PoisonPolicy, Arc<Mutex<T>>),
-    Projection(Arc<dyn SharedRWProjection<T> + Send + Sync>),
+    Projection(Arc<dyn SharedRWProjection<T> + 'static>),
 }
+
+// UNSAFETY: The construction and projection of SharedRWImpl requires Send + Sync, so we can guarantee that
+// all instances of SharedRWImpl are Send + Sync.
+unsafe impl<T: ?Sized> Send for SharedRWImpl<T> {}
+unsafe impl<T: ?Sized> Sync for SharedRWImpl<T> {}
 
 #[repr(transparent)]
 pub struct SharedRW<T: ?Sized> {
@@ -43,7 +48,10 @@ pub struct SharedRW<T: ?Sized> {
 }
 
 impl<T: ?Sized> SharedRW<T> {
-    pub fn new_from(value: Box<T>) -> Self {
+    pub fn from_box(value: Box<T>) -> Self
+    where
+        Box<T>: Send + Sync,
+    {
         Self {
             inner: SharedRWImpl::RwLockBox(PoisonPolicy::Panic, Arc::new(RwLock::new(value))),
         }
@@ -55,9 +63,7 @@ trait SharedRWProjection<T: ?Sized>: Send + Sync {
     fn lock_write(&self) -> SharedWriteLock<T>;
 }
 
-impl<T: ?Sized + Send + Sync, P: ?Sized> SharedRWProjection<P>
-    for (SharedRW<T>, ProjectorRW<T, P>)
-{
+impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T, P>) {
     fn lock_read(&self) -> SharedReadLock<P> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
@@ -184,7 +190,9 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
     }
 }
 
-impl<T> SharedRW<T> {
+// UNSAFETY: All construction functions are gated behind T: Send + Sync to ensure that we cannot
+// construct a SharedRW without the underlying object being thread-safe.
+impl<T: Send + Sync> SharedRW<T> {
     pub fn new(t: T) -> SharedRW<T> {
         SharedRW {
             inner: SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t))),
@@ -209,8 +217,8 @@ impl<T> SharedRW<T> {
     }
 }
 
-impl<T: ?Sized + Send + Sync> SharedRW<T> {
-    pub fn project<P: Send + Sync + 'static, I: Into<ProjectorRW<T, P>>>(
+impl<T: ?Sized> SharedRW<T> {
+    pub fn project<P: ?Sized + 'static, I: Into<ProjectorRW<T, P>>>(
         &self,
         projector: I,
     ) -> SharedRW<P>
@@ -224,7 +232,7 @@ impl<T: ?Sized + Send + Sync> SharedRW<T> {
     }
 
     pub fn project_fn<
-        P: ?Sized + Send + Sync + 'static,
+        P: ?Sized + 'static,
         RO: (Fn(&T) -> &P) + Send + Sync + 'static,
         RW: (Fn(&mut T) -> &mut P) + Send + Sync + 'static,
     >(
@@ -274,7 +282,7 @@ impl<T: ?Sized + Send + Sync> SharedRW<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::project;
+    use crate::{project, project_cast};
 
     use super::{Implementation, SharedRW};
 
@@ -320,8 +328,14 @@ mod test {
 
     #[test]
     pub fn test_unsized_rw() {
-        let boxed = Box::new("123".to_owned()) as Box<dyn AsRef<str> + Send + Sync>;
-        let shared: SharedRW<dyn AsRef<str> + Send + Sync> = SharedRW::new_from(boxed);
+        let shared =
+            SharedRW::new("123".to_owned()).project(project_cast!(x: String => dyn AsRef<str>));
         assert_eq!(shared.lock_read().as_ref(), "123");
+
+        let boxed = Box::new([1, 2, 3]) as Box<[i32]>;
+        let shared: SharedRW<[i32]> = SharedRW::from_box(boxed);
+        assert_eq!(shared.lock_read()[0], 1);
+        shared.lock_write()[0] += 10;
+        assert_eq!(shared.lock_read()[0], 11);
     }
 }

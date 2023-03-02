@@ -45,8 +45,8 @@ impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
 
 /// Stores a read/write projection.
 pub struct ProjectorRW<A: ?Sized, B: ?Sized> {
-    pub ro: Box<dyn ProjectR<A, B>>,
-    pub rw: Box<dyn ProjectW<A, B>>,
+    pub ro: Box<dyn ProjectR<A, B> + Send + Sync>,
+    pub rw: Box<dyn ProjectW<A, B> + Send + Sync>,
 }
 
 impl<A: ?Sized, B: ?Sized> ProjectorRW<A, B> {
@@ -60,7 +60,7 @@ impl<A: ?Sized, B: ?Sized> ProjectorRW<A, B> {
 
 /// Stores a read projection.
 pub struct Projector<A: ?Sized, B: ?Sized> {
-    pub ro: Box<dyn ProjectR<A, B>>,
+    pub ro: Box<dyn ProjectR<A, B> + Send + Sync>,
 }
 
 impl<A: ?Sized, B: ?Sized> Projector<A, B> {
@@ -92,6 +92,22 @@ macro_rules! project {
     }};
 }
 
+#[macro_export]
+macro_rules! project_cast {
+    ($x:ident : $type:ty => $type2:ty) => {{
+        // We just need something with a type
+        let $x: [$type; 0] = [];
+        fn make_projection<A, B: ?Sized>(
+            _: &[A; 0],
+            a: impl (Fn(&A) -> &B) + Send + Sync + 'static,
+            b: impl (Fn(&mut A) -> &mut B) + Send + Sync + 'static,
+        ) -> $crate::ProjectorRW<A, B> {
+            $crate::ProjectorRW::new(a, b)
+        }
+        make_projection(&$x, |$x: _| $x as &$type2, |$x: _| $x as &mut $type2)
+    }};
+}
+
 #[cfg(test)]
 mod test {
     #[test]
@@ -101,5 +117,12 @@ mod test {
         let projection2 = project!(x: (i32, i32), x.1);
         assert_eq!(1, *projection1.ro.project(&x));
         assert_eq!(2, *projection2.ro.project(&x));
+    }
+
+    #[test]
+    fn test_projection_cast() {
+        let x = "123".into();
+        let projection = project_cast!(x: String => (dyn AsRef<str>));
+        assert_eq!(projection.ro.project(&x).as_ref(), "123");
     }
 }
