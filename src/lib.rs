@@ -6,4 +6,4 @@ mod sharedrw;
 
 pub use projection::{Projector, ProjectorRW};
 pub use shared::Shared;
-pub use sharedrw::{SharedRW, Implementation, PoisonPolicy};
+pub use sharedrw::{Implementation, PoisonPolicy, SharedRW};

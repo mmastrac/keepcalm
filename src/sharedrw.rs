@@ -50,7 +50,9 @@ unsafe impl<T: ?Sized> Send for SharedRW<T> {}
 unsafe impl<T: ?Sized> Sync for SharedRW<T> {}
 
 // UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedRW from a non-Send/non-Sync type.
-fn make_shared_rw_value<U: Send + Sync, T: ?Sized + 'static>(inner_impl: SharedRWImpl<T>) -> SharedRW<T> {
+fn make_shared_rw_value<U: Send + Sync, T: ?Sized + 'static>(
+    inner_impl: SharedRWImpl<T>,
+) -> SharedRW<T> {
     SharedRW { inner_impl }
 }
 
