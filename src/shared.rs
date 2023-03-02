@@ -1,7 +1,7 @@
 use crate::projection::{Projector, RawOrProjection};
-use serde::Serialize;
 use std::sync::Arc;
 
+/// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
 pub struct Shared<T: ?Sized> {
     inner: RawOrProjection<Arc<T>, Arc<dyn SharedProjection<T>>>,
@@ -12,6 +12,10 @@ pub struct Shared<T: ?Sized> {
 unsafe impl<T: ?Sized> Send for Shared<T> {}
 unsafe impl<T: ?Sized> Sync for Shared<T> {}
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
+#[cfg(feature = "serde")]
 impl<'a, T: Serialize> Serialize for Shared<T>
 where
     &'a T: Serialize + 'static,
@@ -151,5 +155,13 @@ mod test {
 
         let shared: Shared<[i32]> = Shared::from_box(Box::new([1, 2, 3]));
         assert_eq!(shared[0], 1);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    pub fn test_serde() {
+        fn serialize<S: serde::Serialize>(_: S) {}
+        let shared = Shared::new((1, 2, 3));
+        serialize(shared);
     }
 }

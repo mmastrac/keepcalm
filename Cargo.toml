@@ -5,7 +5,10 @@ edition = "2021"
 description = "Simple shared types for multi-threaded programs"
 
 [dependencies]
-serde = "1"
+serde = { version = "1", optional = true }
+
+[features]
+serde = ["dep:serde"]
 
 [lib]
 name = "keepcalm"

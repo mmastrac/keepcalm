@@ -39,6 +39,40 @@ enum SharedRWImpl<T: ?Sized> {
     Projection(Arc<dyn SharedRWProjection<T> + 'static>),
 }
 
+/// The [`SharedRW`] object hides the complexity of managing `Arc<Mutex<T>>` or `Arc<RwLock<T>>` behind a single interface:
+///
+/// ```rust
+/// # use keepcalm::*;
+/// let object = "123".to_string();
+/// let shared = SharedRW::new(object);
+/// shared.lock_read();
+/// ```
+///
+/// By default, a [`SharedRW`] object uses `Arc<RwLock<T>>` under the hood, but you can choose the synchronization primitive at
+/// construction time. The [`SharedRW`] object *erases* the underlying primitive and you can use them interchangeably:
+///
+/// ```rust
+/// # use keepcalm::*;
+/// fn use_shared(shared: SharedRW<String>) {
+///     shared.lock_read();
+/// }
+///
+/// let shared = SharedRW::new("123".to_string());
+/// use_shared(shared);
+/// let shared = SharedRW::new_with_type("123".to_string(), Implementation::Mutex);
+/// use_shared(shared);
+/// ```
+///
+/// Managing the poison state of synchronization primitives can be challenging as well. Rust will poison a `Mutex` or `RwLock` if you
+/// hold a lock while a `panic!` occurs.
+///
+/// The `SharedRW` type allows you to specify a [`PoisonPolicy`] at construction time. By default, if a synchronization
+/// primitive is poisoned, the `SharedRW` will `panic!` on access. This can be configured so that poisoning is ignored:
+///
+/// ```rust
+/// # use keepcalm::*;
+/// let shared = SharedRW::new_with_policy("123".to_string(), PoisonPolicy::Ignore);
+/// ```
 #[repr(transparent)]
 pub struct SharedRW<T: ?Sized> {
     inner_impl: SharedRWImpl<T>,
