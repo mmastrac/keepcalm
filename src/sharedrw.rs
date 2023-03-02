@@ -1,6 +1,7 @@
 use crate::projection::*;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
+/// Determines what should happen if the underlying synchronization primitive is poisoned.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum PoisonPolicy {
     Ignore,
@@ -23,6 +24,7 @@ impl PoisonPolicy {
     }
 }
 
+/// Specifies the underlying synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Implementation {
     RwLock,
@@ -98,7 +100,7 @@ impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T
         impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
             type Target = P;
             fn deref(&self) -> &Self::Target {
-                (self.projector.ro).project(&*self.lock)
+                (self.projector).project(&*self.lock)
             }
         }
 
@@ -121,13 +123,13 @@ impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T
         impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
             type Target = P;
             fn deref(&self) -> &Self::Target {
-                (self.projector.ro).project(&*self.lock)
+                (self.projector).project(&*self.lock)
             }
         }
 
         impl<'a, T: ?Sized, P: ?Sized> std::ops::DerefMut for HiddenLock<'a, T, P> {
             fn deref_mut(&mut self) -> &mut Self::Target {
-                (self.projector.rw).project_mut(&mut *self.lock)
+                (self.projector).project_mut(&mut *self.lock)
             }
         }
 

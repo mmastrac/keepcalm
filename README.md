@@ -51,7 +51,7 @@ let shared = SharedRW::new_with_policy("123".to_string(), PoisonPolicy::Ignore);
 
 ## Shared
 
-The [`Shared`] object is similar to Rust's [`Arc`], but adds the ability to project.
+The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 
 ## Projection
 
@@ -83,4 +83,31 @@ let shared_string: SharedRW<String> = shared.project(project!(x: Foo, x.tuple.0)
 *shared_string.lock_write() += "hello, world";
 assert_eq!(shared.lock_read().tuple.0, "hello, world");
 assert_eq!(*shared_string.lock_read(), "hello, world");
+```
+
+## Unsized types
+
+Both [`Shared`] and [`SharedRW`] support unsized types, but due to current limitations in the language (see [`std::ops::CoerceUnsized`] for details),
+you need to construct them in special ways.
+
+Unsized traits are supported, but you will either need to specify `Send + Sync` in the shared type, or [`project_cast!`] the object:
+
+```rust
+# use keepcalm::*;
+
+// In this form, `Send + Sync` are visible in the shared type
+let boxed: Box<dyn AsRef<str> + Send + Sync> = Box::new("123".to_string());
+let shared: SharedRW<dyn AsRef<str> + Send + Sync> = SharedRW::from_box(boxed);
+
+// In this form, `Send + Sync` are erased via projection
+let shared = SharedRW::new("123".to_string());
+let shared_asref: SharedRW<dyn AsRef<str>> = shared.project(project_cast!(x: String => dyn AsRef<str>));
+```
+
+Unsized slices are supported using a box:
+
+```rust
+# use keepcalm::*;
+let boxed: Box<[i32]> = Box::new([1, 2, 3]);
+let shared: SharedRW<[i32]> = SharedRW::from_box(boxed);
 ```

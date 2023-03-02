@@ -68,7 +68,7 @@ impl<T: Send + Sync + 'static> Shared<T> {
 
 impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, P>>) {
     fn read(&self) -> &P {
-        (self.1.ro).project(&*self.0)
+        (self.1).project(&*self.0)
     }
 }
 
