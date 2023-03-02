@@ -37,14 +37,38 @@ enum SharedRWImpl<T: ?Sized> {
     Projection(Arc<dyn SharedRWProjection<T> + 'static>),
 }
 
-// UNSAFETY: The construction and projection of SharedRWImpl requires Send + Sync, so we can guarantee that
-// all instances of SharedRWImpl are Send + Sync.
-unsafe impl<T: ?Sized> Send for SharedRWImpl<T> {}
-unsafe impl<T: ?Sized> Sync for SharedRWImpl<T> {}
-
 #[repr(transparent)]
 pub struct SharedRW<T: ?Sized> {
-    inner: SharedRWImpl<T>,
+    inner_impl: SharedRWImpl<T>,
+}
+
+// UNSAFETY: The construction and projection of SharedRW requires Send + Sync, so we can guarantee that
+// all instances of SharedRW are Send + Sync.
+unsafe impl<T: ?Sized> Send for SharedRW<T> {}
+unsafe impl<T: ?Sized> Sync for SharedRW<T> {}
+
+// UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedRW from a non-Send/non-Sync type.
+fn make_shared_rw_value<U: Send + Sync, T: ?Sized>(inner_impl: SharedRWImpl<T>) -> SharedRW<T> {
+    SharedRW { inner_impl }
+}
+
+// UNSAFETY: Projections are always Send + Sync safe.
+fn make_shared_rw_projection<T: ?Sized>(inner_impl: SharedRWImpl<T>) -> SharedRW<T> {
+    SharedRW { inner_impl }
+}
+
+// UNSAFETY: Safe to clone an object that is considered safe.
+impl<T: ?Sized> Clone for SharedRW<T> {
+    fn clone(&self) -> Self {
+        Self {
+            inner_impl: match &self.inner_impl {
+                SharedRWImpl::RwLock(policy, x) => SharedRWImpl::RwLock(*policy, x.clone()),
+                SharedRWImpl::RwLockBox(policy, x) => SharedRWImpl::RwLockBox(*policy, x.clone()),
+                SharedRWImpl::Mutex(policy, x) => SharedRWImpl::Mutex(*policy, x.clone()),
+                SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
+            },
+        }
+    }
 }
 
 impl<T: ?Sized> SharedRW<T> {
@@ -52,9 +76,10 @@ impl<T: ?Sized> SharedRW<T> {
     where
         Box<T>: Send + Sync,
     {
-        Self {
-            inner: SharedRWImpl::RwLockBox(PoisonPolicy::Panic, Arc::new(RwLock::new(value))),
-        }
+        make_shared_rw_value::<Box<T>, T>(SharedRWImpl::RwLockBox(
+            PoisonPolicy::Panic,
+            Arc::new(RwLock::new(value)),
+        ))
     }
 }
 
@@ -113,19 +138,6 @@ impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T
 
         SharedWriteLock {
             inner: SharedWriteLockInner::Projection(Box::new(lock)),
-        }
-    }
-}
-
-impl<T: ?Sized> Clone for SharedRW<T> {
-    fn clone(&self) -> Self {
-        Self {
-            inner: match &self.inner {
-                SharedRWImpl::RwLock(policy, x) => SharedRWImpl::RwLock(*policy, x.clone()),
-                SharedRWImpl::RwLockBox(policy, x) => SharedRWImpl::RwLockBox(*policy, x.clone()),
-                SharedRWImpl::Mutex(policy, x) => SharedRWImpl::Mutex(*policy, x.clone()),
-                SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
-            },
         }
     }
 }
@@ -194,26 +206,25 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
 // construct a SharedRW without the underlying object being thread-safe.
 impl<T: Send + Sync> SharedRW<T> {
     pub fn new(t: T) -> SharedRW<T> {
-        SharedRW {
-            inner: SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t))),
-        }
+        make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(
+            PoisonPolicy::Panic,
+            Arc::new(RwLock::new(t)),
+        ))
     }
 
     pub fn new_with_type(t: T, implementation: Implementation) -> Self {
-        match implementation {
-            Implementation::Mutex => Self {
-                inner: SharedRWImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t))),
-            },
-            Implementation::RwLock => Self {
-                inner: SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t))),
-            },
-        }
+        make_shared_rw_value::<T, T>(match implementation {
+            Implementation::Mutex => {
+                SharedRWImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t)))
+            }
+            Implementation::RwLock => {
+                SharedRWImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t)))
+            }
+        })
     }
 
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        SharedRW {
-            inner: SharedRWImpl::RwLock(policy, Arc::new(RwLock::new(t))),
-        }
+        make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(policy, Arc::new(RwLock::new(t))))
     }
 }
 
@@ -226,9 +237,7 @@ impl<T: ?Sized> SharedRW<T> {
         T: 'static,
     {
         let projectable = Arc::new((self.clone(), projector.into()));
-        SharedRW {
-            inner: SharedRWImpl::Projection(projectable),
-        }
+        make_shared_rw_projection(SharedRWImpl::Projection(projectable))
     }
 
     pub fn project_fn<
@@ -244,13 +253,11 @@ impl<T: ?Sized> SharedRW<T> {
         T: 'static,
     {
         let projectable = Arc::new((self.clone(), ProjectorRW::new(ro, rw)));
-        SharedRW {
-            inner: SharedRWImpl::Projection(projectable),
-        }
+        make_shared_rw_projection(SharedRWImpl::Projection(projectable))
     }
 
     pub fn lock_read(&self) -> SharedReadLock<T> {
-        match &self.inner {
+        match &self.inner_impl {
             SharedRWImpl::RwLock(policy, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),
             },
@@ -265,7 +272,7 @@ impl<T: ?Sized> SharedRW<T> {
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
-        match &self.inner {
+        match &self.inner_impl {
             SharedRWImpl::RwLock(policy, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(policy.handle_lock(lock.write())),
             },
