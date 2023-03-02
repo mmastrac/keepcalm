@@ -32,6 +32,7 @@ pub enum SharedRWImpl<T: ?Sized> {
     RwLockBox(PoisonPolicy, Arc<RwLock<Box<T>>>),
     Mutex(PoisonPolicy, Arc<Mutex<T>>),
     Projection(Arc<dyn SharedRWProjection<T> + 'static>),
+    ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
 impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedRWImpl<T> {
@@ -43,6 +44,7 @@ impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedRWImpl<T> {
             SharedRWImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             // TODO: We should format the underlying projection
             SharedRWImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
+            SharedRWImpl::ProjectionRO(_x) => f.write_fmt(format_args!("(projection)")),
         }
     }
 }
@@ -55,6 +57,7 @@ impl<T: ?Sized> Clone for SharedRWImpl<T> {
             SharedRWImpl::RwLockBox(policy, x) => SharedRWImpl::RwLockBox(*policy, x.clone()),
             SharedRWImpl::Mutex(policy, x) => SharedRWImpl::Mutex(*policy, x.clone()),
             SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
+            SharedRWImpl::ProjectionRO(x) => SharedRWImpl::ProjectionRO(x.clone()),
         }
     }
 }
@@ -80,6 +83,7 @@ impl<T> SharedRWImpl<T> {
                 Err(x) => Err(SharedRWImpl::RwLockBox(policy, x)),
             },
             SharedRWImpl::Projection(_) => Err(self),
+            SharedRWImpl::ProjectionRO(_) => Err(self),
         }
     }
 }
@@ -100,6 +104,7 @@ impl<T: ?Sized> SharedRWImpl<T> {
                 inner: SharedReadLockInner::Mutex(policy.handle_lock(lock.lock())),
             },
             SharedRWImpl::Projection(p) => p.lock_read(),
+            SharedRWImpl::ProjectionRO(p) => p.read(),
         }
     }
 
@@ -116,6 +121,7 @@ impl<T: ?Sized> SharedRWImpl<T> {
                 inner: SharedWriteLockInner::Mutex(policy.handle_lock(lock.lock())),
             },
             SharedRWImpl::Projection(p) => p.lock_write(),
+            SharedRWImpl::ProjectionRO(p) => unreachable!("This should not be possible"),
         }
     }
 }
@@ -123,4 +129,8 @@ impl<T: ?Sized> SharedRWImpl<T> {
 pub trait SharedRWProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
     fn lock_write(&self) -> SharedWriteLock<T>;
+}
+
+pub trait SharedProjection<T: ?Sized>: Send + Sync {
+    fn read(&self) -> SharedReadLock<T>;
 }

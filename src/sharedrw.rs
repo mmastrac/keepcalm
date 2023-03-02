@@ -1,6 +1,6 @@
+use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
-use crate::implementation::*;
 use std::sync::{Arc, Mutex, PoisonError, RwLock};
 
 /// Specifies the underlying synchronization primitive.

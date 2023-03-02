@@ -28,21 +28,6 @@ where
     }
 }
 
-pub enum RawOrProjection<L, P> {
-    Raw(L),
-    Projection(P),
-}
-
-impl<L: Clone, P: Clone> Clone for RawOrProjection<L, P> {
-    fn clone(&self) -> Self {
-        use RawOrProjection::*;
-        match self {
-            Raw(x) => Raw(x.clone()),
-            Projection(x) => Projection(x.clone()),
-        }
-    }
-}
-
 /// Stores a read/write projection.
 pub struct ProjectorRW<A: ?Sized, B: ?Sized> {
     ro: Box<dyn ProjectR<A, B> + Send + Sync>,

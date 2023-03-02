@@ -1,10 +1,12 @@
-use crate::projection::{Projector, RawOrProjection};
-use std::{ops::Deref, sync::Arc};
+use crate::implementation::{SharedProjection, SharedRWImpl};
+use crate::locks::{SharedReadLock, SharedReadLockInner};
+use crate::projection::Projector;
+use std::sync::Arc;
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
 pub struct Shared<T: ?Sized> {
-    inner: RawOrProjection<Arc<T>, Arc<dyn SharedProjection<T>>>,
+    inner: SharedRWImpl<T>,
 }
 
 // UNSAFETY: The construction and projection of Shared requires Send + Sync, so we can guarantee that
@@ -38,12 +40,8 @@ impl<T: ?Sized> Clone for Shared<T> {
 
 impl<T: std::fmt::Debug> std::fmt::Debug for Shared<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.deref().fmt(f)
+        self.read().fmt(f)
     }
-}
-
-trait SharedProjection<T: ?Sized>: Send + Sync {
-    fn read(&self) -> &T;
 }
 
 impl<T: ?Sized> From<Box<T>> for Shared<T>
@@ -52,7 +50,7 @@ where
 {
     fn from(value: Box<T>) -> Self {
         Self {
-            inner: RawOrProjection::Raw(Arc::from(value)),
+            inner: SharedRWImpl::Arc(Arc::from(value)),
         }
     }
 }
@@ -63,7 +61,7 @@ impl<T: ?Sized> Shared<T> {
         Box<T>: Send + Sync,
     {
         Self {
-            inner: RawOrProjection::Raw(Arc::from(t)),
+            inner: SharedRWImpl::Arc(Arc::from(t)),
         }
     }
 }
@@ -71,37 +69,40 @@ impl<T: ?Sized> Shared<T> {
 impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
-            inner: RawOrProjection::Raw(Arc::new(t)),
+            inner: SharedRWImpl::Arc(Arc::new(t)),
         }
     }
 
     /// Attempt to unwrap this object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
-        match self.inner {
-            RawOrProjection::Raw(x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(x),
-                Err(x) => Err(Self {
-                    inner: RawOrProjection::Raw(x),
-                }),
-            },
-            inner @ RawOrProjection::Projection(_) => Err(Self { inner }),
+        match self.inner.try_unwrap() {
+            Ok(x) => Ok(x),
+            Err(inner) => Err(Self { inner }),
         }
     }
 }
 
 impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, P>>) {
-    fn read(&self) -> &P {
-        (self.1).project(&*self.0)
-    }
-}
+    fn read(&self) -> SharedReadLock<P> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedReadLock<'a, T>,
+            projector: &'a Projector<T, P>,
+        }
 
-impl<T: ?Sized> std::ops::Deref for Shared<T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        use RawOrProjection::*;
-        match &self.inner {
-            Raw(x) => x,
-            Projection(x) => x.read(),
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                (self.projector).project(&*self.lock)
+            }
+        }
+
+        let lock = HiddenLock {
+            lock: self.0.read(),
+            projector: &self.1,
+        };
+
+        SharedReadLock {
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
         }
     }
 }
@@ -114,7 +115,7 @@ impl<T: ?Sized> Shared<T> {
         let projector: Projector<T, P> = projector.into();
         let projectable = Arc::new((self.clone(), Arc::new(projector)));
         Shared {
-            inner: RawOrProjection::Projection(projectable),
+            inner: SharedRWImpl::ProjectionRO(projectable),
         }
     }
 
@@ -127,8 +128,12 @@ impl<T: ?Sized> Shared<T> {
     {
         let projectable = Arc::new((self.clone(), Arc::new(Projector::new(ro))));
         Shared {
-            inner: RawOrProjection::Projection(projectable),
+            inner: SharedRWImpl::ProjectionRO(projectable),
         }
+    }
+
+    pub fn read(&self) -> SharedReadLock<T> {
+        self.inner.lock_read()
     }
 }
 
@@ -154,26 +159,26 @@ mod test {
     #[test]
     pub fn test_shared() {
         let shared = Shared::new(1);
-        assert_eq!(*shared, 1);
+        assert_eq!(*shared.read(), 1);
     }
 
     #[test]
     pub fn test_shared_projection() {
         let shared = Shared::new((1, 2));
         let shared_proj = shared.project_fn(|x| &x.0);
-        assert_eq!(*shared_proj, 1);
+        assert_eq!(*shared_proj.read(), 1);
         let shared_proj = shared.project_fn(|x| &x.1);
-        assert_eq!(*shared_proj, 2);
+        assert_eq!(*shared_proj.read(), 2);
     }
 
     #[test]
     pub fn test_unsized() {
         let shared: Shared<dyn AsRef<str>> =
             Shared::new("123".to_owned()).project(project_cast!(x: String => dyn AsRef<str>));
-        assert_eq!(shared.as_ref(), "123");
+        assert_eq!(shared.read().as_ref(), "123");
 
         let shared: Shared<[i32]> = Shared::from_box(Box::new([1, 2, 3]));
-        assert_eq!(shared[0], 1);
+        assert_eq!(shared.read()[0], 1);
     }
 
     #[test]
