@@ -2,7 +2,7 @@ use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
 use crate::Shared;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 /// Specifies the underlying synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -226,7 +226,14 @@ impl<T: ?Sized> SharedRW<T> {
         make_shared_rw_projection(SharedRWImpl::Projection(projectable))
     }
 
-    pub fn shared(&self) -> Shared<T> {
+    /// Transmutate this [`SharedRW`] into a [`Shared`]. The underlying lock stays the same.
+    pub fn shared_copy(&self) -> Shared<T> {
+        Shared::from(self.inner_impl.clone())
+    }
+
+    /// Consume and transmutate this [`SharedRW`] into a [`Shared`]. The underlying lock may be optimized if
+    /// there are no other outstanding writeable references.
+    pub fn shared(self) -> Shared<T> {
         Shared::from(self.inner_impl.clone())
     }
 
