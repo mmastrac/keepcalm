@@ -1,12 +1,11 @@
 [package]
-name = "simpletypes"
+name = "keepcalm"
 version = "0.1.0"
 edition = "2021"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+description = "Simple shared types for multi-threaded programs"
 
 [dependencies]
 serde = "1"
 
 [lib]
-name = "simpletypes"
+name = "keepcalm"
