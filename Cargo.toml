@@ -3,12 +3,11 @@ name = "keepcalm"
 version = "0.1.0"
 edition = "2021"
 description = "Simple shared types for multi-threaded programs"
+license = "Apache-2.0 OR MIT"
+readme = "README.md"
 
 [dependencies]
 serde = { version = "1", optional = true }
 
 [features]
 serde = ["dep:serde"]
-
-[lib]
-name = "keepcalm"
