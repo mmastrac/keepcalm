@@ -1,5 +1,5 @@
 use crate::projection::{Projector, RawOrProjection};
-use std::sync::Arc;
+use std::{sync::Arc, ops::Deref};
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
@@ -36,6 +36,12 @@ impl<T: ?Sized> Clone for Shared<T> {
     }
 }
 
+impl<T: std::fmt::Debug> std::fmt::Debug for Shared<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.deref().fmt(f)
+    }
+}
+
 trait SharedProjection<T: ?Sized>: Send + Sync {
     fn read(&self) -> &T;
 }
@@ -66,6 +72,17 @@ impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
             inner: RawOrProjection::Raw(Arc::new(t)),
+        }
+    }
+
+    /// Attempt to unwrap this object if we are the only holder of its value.
+    pub fn try_unwrap(self) -> Result<T, Self> {
+        match self.inner {
+            RawOrProjection::Raw(x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(x),
+                Err(x) => Err(Self { inner: RawOrProjection::Raw(x) }),
+            },
+            inner @ RawOrProjection::Projection(_) => { Err(Self { inner }) },
         }
     }
 }
@@ -155,6 +172,20 @@ mod test {
 
         let shared: Shared<[i32]> = Shared::from_box(Box::new([1, 2, 3]));
         assert_eq!(shared[0], 1);
+    }
+
+    #[test]
+    pub fn test_unwrap() {
+        let shared = Shared::new(1);
+        let res = shared.try_unwrap().expect("Expected to unwrap");
+        assert_eq!(res, 1);
+
+        let shared = Shared::new(1);
+        let shared2 = shared.clone();
+        // We can't unwrap with multiple references
+        assert!(matches!(shared.try_unwrap(), Err(_)));
+        // We can now unwrap
+        assert!(matches!(shared2.try_unwrap(), Ok(_)));
     }
 
     #[cfg(feature = "serde")]

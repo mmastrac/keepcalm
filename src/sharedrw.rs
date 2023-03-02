@@ -2,7 +2,7 @@ use crate::projection::*;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// Determines what should happen if the underlying synchronization primitive is poisoned.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PoisonPolicy {
     Ignore,
     Panic,
@@ -25,7 +25,7 @@ impl PoisonPolicy {
 }
 
 /// Specifies the underlying synchronization primitive.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Implementation {
     RwLock,
     Mutex,
@@ -106,6 +106,24 @@ impl<T: ?Sized> Clone for SharedRW<T> {
                 SharedRWImpl::Projection(x) => SharedRWImpl::Projection(x.clone()),
             },
         }
+    }
+}
+
+impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedRWImpl<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            SharedRWImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedRWImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedRWImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            // TODO: We should format the underlying projection
+            SharedRWImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
+        }
+    }
+}
+
+impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedRW<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.inner_impl.fmt(f)
     }
 }
 
@@ -280,6 +298,29 @@ impl<T: Send + Sync + 'static> SharedRW<T> {
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
         make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(policy, Arc::new(RwLock::new(t))))
     }
+
+    /// Attempt to unwrap this synchronized object if we are the only holder of its value.
+    pub fn try_unwrap(self) -> Result<T, Self> {
+        match self.inner_impl {
+            SharedRWImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
+                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::Mutex(policy, x))),
+            },
+            SharedRWImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(policy.handle_lock(x.into_inner())),
+                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::RwLock(
+                    policy, x,
+                ))),
+            },
+            SharedRWImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(*policy.handle_lock(x.into_inner())),
+                Err(x) => Err(make_shared_rw_value::<T, T>(SharedRWImpl::RwLockBox(
+                    policy, x,
+                ))),
+            },
+            SharedRWImpl::Projection(_) => Err(self),
+        }
+    }
 }
 
 impl<T: ?Sized> SharedRW<T> {
@@ -398,6 +439,20 @@ mod test {
         assert_eq!(shared.lock_read()[0], 1);
         shared.lock_write()[0] += 10;
         assert_eq!(shared.lock_read()[0], 11);
+    }
+
+    #[test]
+    pub fn test_unwrap() {
+        let shared = SharedRW::new(1);
+        let res = shared.try_unwrap().expect("Expected to unwrap");
+        assert_eq!(res, 1);
+
+        let shared = SharedRW::new(1);
+        let shared2 = shared.clone();
+        // We can't unwrap with multiple references
+        assert!(matches!(shared.try_unwrap(), Err(_)));
+        // We can now unwrap
+        assert!(matches!(shared2.try_unwrap(), Ok(_)));
     }
 
     #[cfg(feature = "serde")]
