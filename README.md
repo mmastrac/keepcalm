@@ -1,6 +1,6 @@
 # Keep Calm (and call Clone)
 
-Simple shared types for multi-threaded programs
+Simple shared types for multi-threaded programs.
 
 This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers. The
 traditional Rust shared object patterns tend to be somewhat version, for example:
@@ -20,7 +20,7 @@ The [`SharedRW`] object hides the complexity of managing `Arc<Mutex<T>>` or `Arc
 # use keepcalm::*;
 let object = "123".to_string();
 let shared = SharedRW::new(object);
-shared.lock_read();
+shared.read();
 ```
 
 By default, a [`SharedRW`] object uses `Arc<RwLock<T>>` under the hood, but you can choose the synchronization primitive at
@@ -29,7 +29,7 @@ construction time. The [`SharedRW`] object *erases* the underlying primitive and
 ```rust
 # use keepcalm::*;
 fn use_shared(shared: SharedRW<String>) {
-    shared.lock_read();
+    shared.read();
 }
 
 let shared = SharedRW::new("123".to_string());
@@ -80,9 +80,9 @@ struct Foo {
 let shared = SharedRW::new(Foo::default());
 let shared_string: SharedRW<String> = shared.project(project!(x: Foo, x.tuple.0));
 
-*shared_string.lock_write() += "hello, world";
-assert_eq!(shared.lock_read().tuple.0, "hello, world");
-assert_eq!(*shared_string.lock_read(), "hello, world");
+*shared_string.write() += "hello, world";
+assert_eq!(shared.read().tuple.0, "hello, world");
+assert_eq!(*shared_string.read(), "hello, world");
 ```
 
 ## Unsized types

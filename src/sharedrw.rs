@@ -16,7 +16,7 @@ pub enum Implementation {
 /// # use keepcalm::*;
 /// let object = "123".to_string();
 /// let shared = SharedRW::new(object);
-/// shared.lock_read();
+/// shared.read();
 /// ```
 ///
 /// By default, a [`SharedRW`] object uses `Arc<RwLock<T>>` under the hood, but you can choose the synchronization primitive at
@@ -25,7 +25,7 @@ pub enum Implementation {
 /// ```rust
 /// # use keepcalm::*;
 /// fn use_shared(shared: SharedRW<String>) {
-///     shared.lock_read();
+///     shared.read();
 /// }
 ///
 /// let shared = SharedRW::new("123".to_string());
@@ -124,7 +124,7 @@ impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T
         }
 
         let lock = HiddenLock {
-            lock: self.0.lock_read(),
+            lock: self.0.read(),
             projector: &self.1,
         };
 
@@ -153,7 +153,7 @@ impl<T: ?Sized, P: ?Sized> SharedRWProjection<P> for (SharedRW<T>, ProjectorRW<T
         }
 
         let lock = HiddenLock {
-            lock: self.0.lock_write(),
+            lock: self.0.write(),
             projector: &self.1,
         };
 
@@ -225,11 +225,11 @@ impl<T: ?Sized> SharedRW<T> {
         make_shared_rw_projection(SharedRWImpl::Projection(projectable))
     }
 
-    pub fn lock_read(&self) -> SharedReadLock<T> {
+    pub fn read(&self) -> SharedReadLock<T> {
         self.inner_impl.lock_read()
     }
 
-    pub fn lock_write(&self) -> SharedWriteLock<T> {
+    pub fn write(&self) -> SharedWriteLock<T> {
         self.inner_impl.lock_write()
     }
 }
@@ -243,15 +243,15 @@ mod test {
     #[test]
     pub fn test_shared_rw() {
         let shared = SharedRW::new(1);
-        *shared.lock_write() += 1;
-        assert_eq!(*shared.lock_read(), 2);
+        *shared.write() += 1;
+        assert_eq!(*shared.read(), 2);
     }
 
     #[test]
     pub fn test_shared_rw_mutex() {
         let shared = SharedRW::new_with_type(1, Implementation::Mutex);
-        *shared.lock_write() += 1;
-        assert_eq!(*shared.lock_read(), 2);
+        *shared.write() += 1;
+        assert_eq!(*shared.read(), 2);
     }
 
     #[test]
@@ -260,10 +260,10 @@ mod test {
         let shared_1 = shared.project_fn(|x| &x.0, |x| &mut (x.0));
         let shared_2 = shared.project_fn(|x| &x.1, |x| &mut (x.1));
 
-        *shared_1.lock_write() += 1;
-        *shared_2.lock_write() += 10;
+        *shared_1.write() += 1;
+        *shared_2.write() += 10;
 
-        assert_eq!(*shared.lock_read(), (2, 11));
+        assert_eq!(*shared.read(), (2, 11));
     }
 
     #[test]
@@ -274,23 +274,23 @@ mod test {
         let shared2 = shared.project(projection);
         let projection2 = project!(x: (i32, (i32, i32)), x.1 .1);
         let shared3 = shared2.project(projection2);
-        *shared3.lock_write() += 10;
-        (shared2.lock_write().0) += 100;
+        *shared3.write() += 10;
+        (shared2.write().0) += 100;
 
-        assert_eq!(*shared.lock_read(), (1, (102, (3, 14))));
+        assert_eq!(*shared.read(), (1, (102, (3, 14))));
     }
 
     #[test]
     pub fn test_unsized_rw() {
         let shared =
             SharedRW::new("123".to_owned()).project(project_cast!(x: String => dyn AsRef<str>));
-        assert_eq!(shared.lock_read().as_ref(), "123");
+        assert_eq!(shared.read().as_ref(), "123");
 
         let boxed = Box::new([1, 2, 3]) as Box<[i32]>;
         let shared: SharedRW<[i32]> = SharedRW::from_box(boxed);
-        assert_eq!(shared.lock_read()[0], 1);
-        shared.lock_write()[0] += 10;
-        assert_eq!(shared.lock_read()[0], 11);
+        assert_eq!(shared.read()[0], 1);
+        shared.write()[0] += 10;
+        assert_eq!(shared.read()[0], 11);
     }
 
     #[test]
