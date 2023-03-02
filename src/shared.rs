@@ -1,8 +1,8 @@
-use crate::implementation::{SharedProjection, SharedImpl};
+use crate::implementation::{SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
-use crate::SharedMut;
-use std::sync::Arc;
+use crate::{PoisonPolicy, SharedMut};
+use std::sync::{Arc, Mutex};
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
@@ -79,6 +79,34 @@ impl<T: ?Sized> Shared<T> {
     {
         Self {
             inner: SharedImpl::Arc(Arc::from(t)),
+        }
+    }
+}
+
+impl<T: Send> Shared<T> {
+    /// The [`Shared::new`] function requires a type that is both `Send + Sync`. If this is not possible, you may call
+    /// [`Shared::new_unsync`] to create a [`Shared`] implementation that uses a [`Mutex`].
+    ///
+    /// This will fail to compile:
+    ///
+    /// ```compile_fail
+    /// # use std::{cell::Cell, marker::PhantomData};
+    /// # use keepcalm::*;
+    /// # pub type Unsync = PhantomData<Cell<()>>;
+    /// Shared::new(Unsync {});
+    /// ```
+    ///
+    /// This will work:
+    ///
+    /// ```rust
+    /// # use std::{cell::Cell, marker::PhantomData};
+    /// # use keepcalm::*;
+    /// # pub type Unsync = PhantomData<Cell<()>>;
+    /// Shared::new_unsync(Unsync {});
+    /// ```
+    pub fn new_unsync(t: T) -> Self {
+        Self {
+            inner: SharedImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t))),
         }
     }
 }
@@ -210,6 +238,13 @@ mod test {
         assert!(matches!(shared.try_unwrap(), Err(_)));
         // We can now unwrap
         assert!(matches!(shared2.try_unwrap(), Ok(_)));
+    }
+
+    #[test]
+    pub fn test_unsync() {
+        use std::{cell::Cell, marker::PhantomData};
+        pub type Unsync = PhantomData<Cell<()>>;
+        Shared::new_unsync(Unsync {});
     }
 
     #[cfg(feature = "serde")]
