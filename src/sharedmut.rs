@@ -47,7 +47,7 @@ pub enum Implementation {
 /// ```
 #[repr(transparent)]
 pub struct SharedMut<T: ?Sized> {
-    pub(crate) inner_impl: SharedMutImpl<T>,
+    pub(crate) inner_impl: SharedImpl<T>,
 }
 
 // UNSAFETY: The construction and projection of SharedMut requires Send + Sync, so we can guarantee that
@@ -57,13 +57,13 @@ unsafe impl<T: ?Sized> Sync for SharedMut<T> {}
 
 // UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedMut from a non-Send/non-Sync type.
 fn make_shared_rw_value<U: Send + Sync, T: ?Sized + 'static>(
-    inner_impl: SharedMutImpl<T>,
+    inner_impl: SharedImpl<T>,
 ) -> SharedMut<T> {
     SharedMut { inner_impl }
 }
 
 // UNSAFETY: Projections are always Send + Sync safe.
-fn make_shared_rw_projection<T: ?Sized>(inner_impl: SharedMutImpl<T>) -> SharedMut<T> {
+fn make_shared_rw_projection<T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<T> {
     SharedMut { inner_impl }
 }
 
@@ -87,7 +87,7 @@ impl<T: ?Sized> SharedMut<T> {
     where
         Box<T>: Send + Sync + 'static,
     {
-        make_shared_rw_value::<Box<T>, T>(SharedMutImpl::RwLockBox(
+        make_shared_rw_value::<Box<T>, T>(SharedImpl::RwLockBox(
             PoisonPolicy::Panic,
             Arc::new(RwLock::new(value)),
         ))
@@ -168,7 +168,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 // construct a SharedMut without the underlying object being thread-safe.
 impl<T: Send + Sync + 'static> SharedMut<T> {
     pub fn new(t: T) -> SharedMut<T> {
-        make_shared_rw_value::<T, T>(SharedMutImpl::RwLock(
+        make_shared_rw_value::<T, T>(SharedImpl::RwLock(
             PoisonPolicy::Panic,
             Arc::new(RwLock::new(t)),
         ))
@@ -177,16 +177,16 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
     pub fn new_with_type(t: T, implementation: Implementation) -> Self {
         make_shared_rw_value::<T, T>(match implementation {
             Implementation::Mutex => {
-                SharedMutImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t)))
+                SharedImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t)))
             }
             Implementation::RwLock => {
-                SharedMutImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t)))
+                SharedImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t)))
             }
         })
     }
 
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        make_shared_rw_value::<T, T>(SharedMutImpl::RwLock(policy, Arc::new(RwLock::new(t))))
+        make_shared_rw_value::<T, T>(SharedImpl::RwLock(policy, Arc::new(RwLock::new(t))))
     }
 
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
@@ -207,7 +207,7 @@ impl<T: ?Sized> SharedMut<T> {
         T: 'static,
     {
         let projectable = Arc::new((self.clone(), projector.into()));
-        make_shared_rw_projection(SharedMutImpl::Projection(projectable))
+        make_shared_rw_projection(SharedImpl::Projection(projectable))
     }
 
     pub fn project_fn<
@@ -223,7 +223,7 @@ impl<T: ?Sized> SharedMut<T> {
         T: 'static,
     {
         let projectable = Arc::new((self.clone(), ProjectorRW::new(ro, rw)));
-        make_shared_rw_projection(SharedMutImpl::Projection(projectable))
+        make_shared_rw_projection(SharedImpl::Projection(projectable))
     }
 
     /// Transmutate this [`SharedMut`] into a [`Shared`]. The underlying lock stays the same.

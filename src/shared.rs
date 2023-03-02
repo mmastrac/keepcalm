@@ -1,4 +1,4 @@
-use crate::implementation::{SharedProjection, SharedMutImpl};
+use crate::implementation::{SharedProjection, SharedImpl};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
 use crate::SharedMut;
@@ -7,7 +7,7 @@ use std::sync::Arc;
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]
 pub struct Shared<T: ?Sized> {
-    inner: SharedMutImpl<T>,
+    inner: SharedImpl<T>,
 }
 
 // UNSAFETY: The construction and projection of Shared requires Send + Sync, so we can guarantee that
@@ -51,14 +51,14 @@ where
 {
     fn from(value: Box<T>) -> Self {
         Self {
-            inner: SharedMutImpl::Arc(Arc::from(value)),
+            inner: SharedImpl::Arc(Arc::from(value)),
         }
     }
 }
 
 // Use for transmutation from SharedMut to Shared.
-impl<T: ?Sized> From<SharedMutImpl<T>> for Shared<T> {
-    fn from(inner: SharedMutImpl<T>) -> Self {
+impl<T: ?Sized> From<SharedImpl<T>> for Shared<T> {
+    fn from(inner: SharedImpl<T>) -> Self {
         Self { inner }
     }
 }
@@ -78,7 +78,7 @@ impl<T: ?Sized> Shared<T> {
         Box<T>: Send + Sync,
     {
         Self {
-            inner: SharedMutImpl::Arc(Arc::from(t)),
+            inner: SharedImpl::Arc(Arc::from(t)),
         }
     }
 }
@@ -86,7 +86,7 @@ impl<T: ?Sized> Shared<T> {
 impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
-            inner: SharedMutImpl::Arc(Arc::new(t)),
+            inner: SharedImpl::Arc(Arc::new(t)),
         }
     }
 
@@ -132,7 +132,7 @@ impl<T: ?Sized> Shared<T> {
         let projector: Projector<T, P> = projector.into();
         let projectable = Arc::new((self.clone(), Arc::new(projector)));
         Shared {
-            inner: SharedMutImpl::ProjectionRO(projectable),
+            inner: SharedImpl::ProjectionRO(projectable),
         }
     }
 
@@ -145,7 +145,7 @@ impl<T: ?Sized> Shared<T> {
     {
         let projectable = Arc::new((self.clone(), Arc::new(Projector::new(ro))));
         Shared {
-            inner: SharedMutImpl::ProjectionRO(projectable),
+            inner: SharedImpl::ProjectionRO(projectable),
         }
     }
 

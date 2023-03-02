@@ -24,7 +24,7 @@ impl PoisonPolicy {
     }
 }
 
-pub enum SharedMutImpl<T: ?Sized> {
+pub enum SharedImpl<T: ?Sized> {
     /// Only usable by non-mutable shares.
     Arc(Arc<T>),
     RwLock(PoisonPolicy, Arc<RwLock<T>>),
@@ -35,93 +35,93 @@ pub enum SharedMutImpl<T: ?Sized> {
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
-impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedMutImpl<T> {
+impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SharedMutImpl::Arc(x) => x.fmt(f),
-            SharedMutImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
-            SharedMutImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
-            SharedMutImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedImpl::Arc(x) => x.fmt(f),
+            SharedImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             // TODO: We should format the underlying projection
-            SharedMutImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
-            SharedMutImpl::ProjectionRO(_x) => f.write_fmt(format_args!("(projection)")),
+            SharedImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
+            SharedImpl::ProjectionRO(_x) => f.write_fmt(format_args!("(projection)")),
         }
     }
 }
 
-impl<T: ?Sized> Clone for SharedMutImpl<T> {
+impl<T: ?Sized> Clone for SharedImpl<T> {
     fn clone(&self) -> Self {
         match &self {
-            SharedMutImpl::Arc(x) => SharedMutImpl::Arc(x.clone()),
-            SharedMutImpl::RwLock(policy, x) => SharedMutImpl::RwLock(*policy, x.clone()),
-            SharedMutImpl::RwLockBox(policy, x) => SharedMutImpl::RwLockBox(*policy, x.clone()),
-            SharedMutImpl::Mutex(policy, x) => SharedMutImpl::Mutex(*policy, x.clone()),
-            SharedMutImpl::Projection(x) => SharedMutImpl::Projection(x.clone()),
-            SharedMutImpl::ProjectionRO(x) => SharedMutImpl::ProjectionRO(x.clone()),
+            SharedImpl::Arc(x) => SharedImpl::Arc(x.clone()),
+            SharedImpl::RwLock(policy, x) => SharedImpl::RwLock(*policy, x.clone()),
+            SharedImpl::RwLockBox(policy, x) => SharedImpl::RwLockBox(*policy, x.clone()),
+            SharedImpl::Mutex(policy, x) => SharedImpl::Mutex(*policy, x.clone()),
+            SharedImpl::Projection(x) => SharedImpl::Projection(x.clone()),
+            SharedImpl::ProjectionRO(x) => SharedImpl::ProjectionRO(x.clone()),
         }
     }
 }
 
-impl<T> SharedMutImpl<T> {
+impl<T> SharedImpl<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
         match self {
-            SharedMutImpl::Arc(x) => match Arc::try_unwrap(x) {
+            SharedImpl::Arc(x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(x),
-                Err(x) => Err(SharedMutImpl::Arc(x)),
+                Err(x) => Err(SharedImpl::Arc(x)),
             },
-            SharedMutImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
+            SharedImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(policy.handle_lock(x.into_inner())),
-                Err(x) => Err(SharedMutImpl::Mutex(policy, x)),
+                Err(x) => Err(SharedImpl::Mutex(policy, x)),
             },
-            SharedMutImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
+            SharedImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(policy.handle_lock(x.into_inner())),
-                Err(x) => Err(SharedMutImpl::RwLock(policy, x)),
+                Err(x) => Err(SharedImpl::RwLock(policy, x)),
             },
-            SharedMutImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
+            SharedImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(*policy.handle_lock(x.into_inner())),
-                Err(x) => Err(SharedMutImpl::RwLockBox(policy, x)),
+                Err(x) => Err(SharedImpl::RwLockBox(policy, x)),
             },
-            SharedMutImpl::Projection(_) => Err(self),
-            SharedMutImpl::ProjectionRO(_) => Err(self),
+            SharedImpl::Projection(_) => Err(self),
+            SharedImpl::ProjectionRO(_) => Err(self),
         }
     }
 }
 
-impl<T: ?Sized> SharedMutImpl<T> {
+impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self {
-            SharedMutImpl::Arc(x) => SharedReadLock {
+            SharedImpl::Arc(x) => SharedReadLock {
                 inner: SharedReadLockInner::Arc(&x),
             },
-            SharedMutImpl::RwLock(policy, lock) => SharedReadLock {
+            SharedImpl::RwLock(policy, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.handle_lock(lock.read())),
             },
-            SharedMutImpl::RwLockBox(policy, lock) => SharedReadLock {
+            SharedImpl::RwLockBox(policy, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLockBox(policy.handle_lock(lock.read())),
             },
-            SharedMutImpl::Mutex(policy, lock) => SharedReadLock {
+            SharedImpl::Mutex(policy, lock) => SharedReadLock {
                 inner: SharedReadLockInner::Mutex(policy.handle_lock(lock.lock())),
             },
-            SharedMutImpl::Projection(p) => p.lock_read(),
-            SharedMutImpl::ProjectionRO(p) => p.read(),
+            SharedImpl::Projection(p) => p.lock_read(),
+            SharedImpl::ProjectionRO(p) => p.read(),
         }
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self {
-            SharedMutImpl::Arc(_) => unreachable!("This should not be possible"),
-            SharedMutImpl::RwLock(policy, lock) => SharedWriteLock {
+            SharedImpl::Arc(_) => unreachable!("This should not be possible"),
+            SharedImpl::RwLock(policy, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(policy.handle_lock(lock.write())),
             },
-            SharedMutImpl::RwLockBox(policy, lock) => SharedWriteLock {
+            SharedImpl::RwLockBox(policy, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLockBox(policy.handle_lock(lock.write())),
             },
-            SharedMutImpl::Mutex(policy, lock) => SharedWriteLock {
+            SharedImpl::Mutex(policy, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::Mutex(policy.handle_lock(lock.lock())),
             },
-            SharedMutImpl::Projection(p) => p.lock_write(),
-            SharedMutImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
+            SharedImpl::Projection(p) => p.lock_write(),
+            SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
     }
 }
