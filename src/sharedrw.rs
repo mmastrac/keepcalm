@@ -121,6 +121,22 @@ impl<T: ?Sized> SharedRW<T> {
     }
 }
 
+#[cfg(feature = "serde")]
+use serde::Serialize;
+
+#[cfg(feature = "serde")]
+impl<'a, T: Serialize> Serialize for SharedRW<T>
+where
+    &'a T: Serialize + 'static,
+{
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        self.lock_read().serialize(serializer)
+    }
+}
+
 trait SharedRWProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
     fn lock_write(&self) -> SharedWriteLock<T>;
@@ -382,5 +398,13 @@ mod test {
         assert_eq!(shared.lock_read()[0], 1);
         shared.lock_write()[0] += 10;
         assert_eq!(shared.lock_read()[0], 11);
+    }
+
+    #[cfg(feature = "serde")]
+    #[test]
+    pub fn test_serde() {
+        fn serialize<S: serde::Serialize>(_: S) {}
+        let shared = SharedRW::new((1, 2, 3));
+        serialize(shared);
     }
 }
