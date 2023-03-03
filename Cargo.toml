@@ -1,10 +1,11 @@
 [package]
 name = "keepcalm"
-version = "0.1.1"
+version = "0.1.2"
 edition = "2021"
 description = "Simple shared types for multi-threaded programs"
 license = "Apache-2.0 OR MIT"
 readme = "README.md"
+repository = "https://github.com/mmastrac/keepcalm"
 
 [dependencies]
 serde = { version = "1", optional = true }
