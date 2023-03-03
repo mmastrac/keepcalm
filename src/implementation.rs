@@ -2,10 +2,13 @@ use crate::locks::*;
 use parking_lot::{Mutex, RwLock};
 use std::sync::{atomic::AtomicBool, Arc};
 
-/// Determines what should happen if the underlying synchronization primitive is poisoned.
+/// Determines what should happen if the underlying synchronization primitive is poisoned by being held during
+/// a `panic!`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PoisonPolicy {
+    /// Ignore poisoned values.
     Ignore,
+    /// Panic if the value is poisoned.
     Panic,
 }
 
