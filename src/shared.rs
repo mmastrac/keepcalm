@@ -94,6 +94,9 @@ impl<T: Send> Shared<T> {
     /// # use std::{cell::Cell, marker::PhantomData};
     /// # use keepcalm::*;
     /// # pub type Unsync = PhantomData<Cell<()>>;
+    /// // Compiler error:
+    /// // error[E0277]: (type) cannot be shared between threads safely
+    /// // required by a bound in `keepcalm::Shared::<T>::new
     /// Shared::new(Unsync {});
     /// ```
     ///
@@ -118,7 +121,9 @@ impl<T: Send + Sync + 'static> Shared<T> {
             inner: SharedImpl::Arc(Arc::new(t)),
         }
     }
+}
 
+impl <T> Shared<T> {
     /// Attempt to unwrap this object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
         match self.inner.try_unwrap() {

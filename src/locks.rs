@@ -98,6 +98,7 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
 /// pub type Unsend = std::marker::PhantomData<std::sync::MutexGuard<'static, ()>>;
 /// ensure_send::<SharedWriteLock<'static, Unsend>>();
 /// ```
+#[cfg(doctest)]
 mod send_test {}
 
 #[cfg(test)]
