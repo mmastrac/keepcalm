@@ -1,3 +1,5 @@
+use std::sync::atomic::AtomicBool;
+
 use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 
 /// UNSAFETY: We can implement this iff T: Send
@@ -24,6 +26,17 @@ pub enum SharedReadLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedReadLock<'a, T: ?Sized> {
     pub(crate) inner: SharedReadLockInner<'a, T>,
+    pub(crate) poison: Option<&'a AtomicBool>,
+}
+
+impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
+    fn drop(&mut self) {
+        if let Some(poison) = self.poison {
+            if std::thread::panicking() {
+                poison.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
 }
 
 pub enum SharedWriteLockInner<'a, T: ?Sized> {
@@ -40,6 +53,7 @@ pub enum SharedWriteLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) inner: SharedWriteLockInner<'a, T>,
+    pub(crate) poison: Option<&'a AtomicBool>,
 }
 
 impl<'a, T: ?Sized> std::ops::Deref for SharedReadLock<'a, T> {
@@ -77,6 +91,16 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
             RwLockBox(x) => &mut *x,
             Mutex(x) => &mut *x,
             Projection(x) => &mut *x,
+        }
+    }
+}
+
+impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
+    fn drop(&mut self) {
+        if let Some(poison) = self.poison {
+            if std::thread::panicking() {
+                poison.store(true, std::sync::atomic::Ordering::Release);
+            }
         }
     }
 }

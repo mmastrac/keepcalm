@@ -51,6 +51,8 @@ pub struct SharedMut<T: ?Sized> {
     pub(crate) inner_impl: SharedImpl<T>,
 }
 
+impl<T: ?Sized> std::panic::RefUnwindSafe for SharedMut<T> {}
+
 // UNSAFETY: The construction and projection of SharedMut requires Send + Sync, so we can guarantee that
 // all instances of SharedMut are Send + Sync.
 unsafe impl<T: ?Sized> Send for SharedMut<T> {}
@@ -88,7 +90,7 @@ impl<T: ?Sized> SharedMut<T> {
     {
         make_shared_rw_value::<Box<T>, T>(SharedImpl::RwLockBox(
             PoisonPolicy::Panic,
-            Arc::new(RwLock::new(value)),
+            Arc::new((Default::default(), RwLock::new(value))),
         ))
     }
 }
@@ -130,6 +132,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
         SharedReadLock {
             inner: SharedReadLockInner::Projection(Box::new(lock)),
+            poison: None,
         }
     }
 
@@ -159,6 +162,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
         SharedWriteLock {
             inner: SharedWriteLockInner::Projection(Box::new(lock)),
+            poison: None,
         }
     }
 }
@@ -167,25 +171,30 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 // construct a SharedMut without the underlying object being thread-safe.
 impl<T: Send + Sync + 'static> SharedMut<T> {
     pub fn new(t: T) -> SharedMut<T> {
-        make_shared_rw_value::<T, T>(SharedImpl::RwLock(
-            PoisonPolicy::Panic,
-            Arc::new(RwLock::new(t)),
-        ))
+        Self::new_with_type(t, Implementation::RwLock)
     }
 
     pub fn new_with_type(t: T, implementation: Implementation) -> Self {
-        make_shared_rw_value::<T, T>(match implementation {
-            Implementation::Mutex => {
-                SharedImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t)))
-            }
-            Implementation::RwLock => {
-                SharedImpl::RwLock(PoisonPolicy::Panic, Arc::new(RwLock::new(t)))
-            }
-        })
+        Self::new_with_type_and_policy(t, implementation, PoisonPolicy::Panic)
     }
 
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        make_shared_rw_value::<T, T>(SharedImpl::RwLock(policy, Arc::new(RwLock::new(t))))
+        Self::new_with_type_and_policy(t, Implementation::RwLock, policy)
+    }
+
+    pub fn new_with_type_and_policy(
+        t: T,
+        implementation: Implementation,
+        policy: PoisonPolicy,
+    ) -> Self {
+        make_shared_rw_value::<T, T>(match implementation {
+            Implementation::Mutex => {
+                SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t))))
+            }
+            Implementation::RwLock => {
+                SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
+            }
+        })
     }
 }
 
@@ -249,9 +258,9 @@ impl<T: ?Sized> SharedMut<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::{project, project_cast};
-
     use super::{Implementation, SharedMut};
+    use crate::{project, project_cast, PoisonPolicy};
+    use paste::paste;
 
     #[test]
     pub fn test_shared_rw() {
@@ -319,6 +328,55 @@ mod test {
         // We can now unwrap
         assert!(matches!(shared2.try_unwrap(), Ok(_)));
     }
+
+    macro_rules! test_poison_policy {
+        ($name:ident , $imp:ident , Ignore) => {
+            paste! {
+                #[test]
+                pub fn [< $name _read >]() {
+                    test_poison_policy!(= read, $imp, Ignore);
+                }
+
+                #[test]
+                pub fn [< $name _write >]() {
+                    test_poison_policy!(= write, $imp, Ignore);
+                }
+            }
+        };
+        ($name:ident , $imp:ident , Panic) => {
+            paste! {
+                #[test]
+                #[should_panic]
+                pub fn [< $name _read >]() {
+                    test_poison_policy!(= read, $imp, Panic);
+                }
+
+                #[test]
+                #[should_panic]
+                pub fn [< $name _write >]() {
+                    test_poison_policy!(= write, $imp, Panic);
+                }
+            }
+        };
+        (= $dir:ident, $imp:ident , $policy:ident) => {
+            let shared = SharedMut::new_with_type_and_policy(
+                1_usize,
+                Implementation::$imp,
+                PoisonPolicy::$policy,
+            );
+            let res = std::panic::catch_unwind(|| {
+                let _lock = shared.$dir();
+                panic!("This is a real panic, expect a backtrace!");
+            });
+            assert!(res.is_err());
+            assert_eq!(*shared.$dir(), 1);
+        };
+    }
+
+    test_poison_policy!(test_poison_policy_mutex_ignore, Mutex, Ignore);
+    test_poison_policy!(test_poison_policy_rwlock_ignore, RwLock, Ignore);
+    test_poison_policy!(test_poison_policy_mutex_panic, Mutex, Panic);
+    test_poison_policy!(test_poison_policy_rwlock_panic, RwLock, Panic);
 
     #[cfg(feature = "serde")]
     #[test]

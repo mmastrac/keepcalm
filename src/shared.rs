@@ -16,6 +16,8 @@ pub struct Shared<T: ?Sized> {
 unsafe impl<T: ?Sized> Send for Shared<T> {}
 unsafe impl<T: ?Sized> Sync for Shared<T> {}
 
+impl<T: ?Sized> std::panic::RefUnwindSafe for Shared<T> {}
+
 #[cfg(feature = "serde")]
 use serde::Serialize;
 
@@ -110,7 +112,10 @@ impl<T: Send> Shared<T> {
     /// ```
     pub fn new_unsync(t: T) -> Self {
         Self {
-            inner: SharedImpl::Mutex(PoisonPolicy::Panic, Arc::new(Mutex::new(t))),
+            inner: SharedImpl::Mutex(
+                PoisonPolicy::Panic,
+                Arc::new((Default::default(), Mutex::new(t))),
+            ),
         }
     }
 }
@@ -154,6 +159,7 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
 
         SharedReadLock {
             inner: SharedReadLockInner::Projection(Box::new(lock)),
+            poison: None,
         }
     }
 }
