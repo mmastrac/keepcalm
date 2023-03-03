@@ -57,9 +57,7 @@ unsafe impl<T: ?Sized> Send for SharedMut<T> {}
 unsafe impl<T: ?Sized> Sync for SharedMut<T> {}
 
 // UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedMut from a non-Send/non-Sync type.
-fn make_shared_rw_value<U: Send + Sync, T: ?Sized + 'static>(
-    inner_impl: SharedImpl<T>,
-) -> SharedMut<T> {
+fn make_shared_rw_value<U: Send + Sync, T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<T> {
     SharedMut { inner_impl }
 }
 
@@ -189,12 +187,14 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
         make_shared_rw_value::<T, T>(SharedImpl::RwLock(policy, Arc::new(RwLock::new(t))))
     }
+}
 
+impl<T> SharedMut<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
         match self.inner_impl.try_unwrap() {
             Ok(x) => Ok(x),
-            Err(x) => Err(make_shared_rw_value::<T, T>(x)),
+            Err(inner_impl) => Err(Self { inner_impl }),
         }
     }
 }

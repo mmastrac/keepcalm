@@ -123,7 +123,7 @@ impl<T: Send + Sync + 'static> Shared<T> {
     }
 }
 
-impl <T> Shared<T> {
+impl<T> Shared<T> {
     /// Attempt to unwrap this object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
         match self.inner.try_unwrap() {
