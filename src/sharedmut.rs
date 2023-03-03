@@ -2,7 +2,8 @@ use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
 use crate::Shared;
-use std::sync::{Arc, Mutex, RwLock};
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 
 /// Specifies the underlying synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

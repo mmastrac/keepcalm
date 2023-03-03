@@ -7,6 +7,7 @@ mod shared;
 mod sharedmut;
 
 pub use implementation::PoisonPolicy;
+pub use locks::{SharedReadLock, SharedWriteLock};
 pub use projection::{Projector, ProjectorRW};
 pub use shared::Shared;
 pub use sharedmut::{Implementation, SharedMut};

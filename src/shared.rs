@@ -2,7 +2,8 @@ use crate::implementation::{SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
 use crate::{PoisonPolicy, SharedMut};
-use std::sync::{Arc, Mutex};
+use parking_lot::Mutex;
+use std::sync::Arc;
 
 /// The [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project.
 #[repr(transparent)]

@@ -1,5 +1,6 @@
 use crate::locks::*;
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use parking_lot::{Mutex, RwLock};
+use std::sync::Arc;
 
 /// Determines what should happen if the underlying synchronization primitive is poisoned.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -9,19 +10,22 @@ pub enum PoisonPolicy {
 }
 
 impl PoisonPolicy {
-    fn handle<T>(&self, error: PoisonError<T>) -> T {
-        match self {
-            PoisonPolicy::Ignore => error.into_inner(),
-            PoisonPolicy::Panic => panic!("This shared object was poisoned"),
-        }
+    fn handle_lock<T>(&self, res: T) -> T {
+        res
     }
+    // fn handle<T>(&self, error: PoisonError<T>) -> T {
+    //     match self {
+    //         PoisonPolicy::Ignore => error.into_inner(),
+    //         PoisonPolicy::Panic => panic!("This shared object was poisoned"),
+    //     }
+    // }
 
-    fn handle_lock<T>(&self, res: Result<T, PoisonError<T>>) -> T {
-        match res {
-            Ok(lock) => lock,
-            Err(err) => self.handle(err),
-        }
-    }
+    // fn handle_lock<T>(&self, res: Result<T, PoisonError<T>>) -> T {
+    //     match res {
+    //         Ok(lock) => lock,
+    //         Err(err) => self.handle(err),
+    //     }
+    // }
 }
 
 pub enum SharedImpl<T: ?Sized> {
