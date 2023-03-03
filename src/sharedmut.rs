@@ -106,7 +106,7 @@ where
     where
         S: serde::Serializer,
     {
-        self.lock_read().serialize(serializer)
+        self.read().serialize(serializer)
     }
 }
 
