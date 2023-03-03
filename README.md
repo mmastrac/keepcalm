@@ -4,7 +4,7 @@
 [![docs.rs](https://docs.rs/keepcalm/badge.svg)](https://docs.rs/keepcalm)
 [![crates.io](https://img.shields.io/crates/v/keepcalm.svg)](https://crates.io/crates/keepcalm)
 
-Simple shared types for multi-threaded programs.
+Simple shared types for multi-threaded Rust programs.
 
 This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers. The
 traditional Rust shared object patterns tend to be somewhat version, for example:
