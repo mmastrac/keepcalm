@@ -1,6 +1,9 @@
 use crate::locks::*;
 use parking_lot::{Mutex, RwLock};
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    ops::Deref,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 /// Determines what should happen if the underlying synchronization primitive is poisoned by being held during
 /// a `panic!`.
@@ -36,6 +39,8 @@ type Poison = std::sync::atomic::AtomicBool;
 pub enum SharedImpl<T: ?Sized> {
     /// Only usable by non-mutable shares.
     Arc(Arc<T>),
+    /// RCU-mode, which requires us to bring a cloning function along for the ride.
+    ReadCopyUpdate(Arc<dyn Fn(&Arc<T>) -> Box<T> + Send>, Arc<RwLock<Arc<T>>>),
     RwLock(PoisonPolicy, Arc<(Poison, RwLock<T>)>),
     /// Used for unsized types
     RwLockBox(PoisonPolicy, Arc<(Poison, RwLock<Box<T>>)>),
@@ -48,6 +53,7 @@ impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             SharedImpl::Arc(x) => x.fmt(f),
+            SharedImpl::ReadCopyUpdate(_, x) => x.fmt(f),
             SharedImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             SharedImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
             SharedImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
@@ -62,6 +68,7 @@ impl<T: ?Sized> Clone for SharedImpl<T> {
     fn clone(&self) -> Self {
         match &self {
             SharedImpl::Arc(x) => SharedImpl::Arc(x.clone()),
+            SharedImpl::ReadCopyUpdate(x, y) => SharedImpl::ReadCopyUpdate(x.clone(), y.clone()),
             SharedImpl::RwLock(policy, x) => SharedImpl::RwLock(*policy, x.clone()),
             SharedImpl::RwLockBox(policy, x) => SharedImpl::RwLockBox(*policy, x.clone()),
             SharedImpl::Mutex(policy, x) => SharedImpl::Mutex(*policy, x.clone()),
@@ -78,6 +85,13 @@ impl<T> SharedImpl<T> {
             SharedImpl::Arc(x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(x),
                 Err(x) => Err(SharedImpl::Arc(x)),
+            },
+            Self::ReadCopyUpdate(x, y) => match Arc::try_unwrap(y) {
+                Ok(y) => match Arc::try_unwrap(y.into_inner()) {
+                    Ok(y) => Ok(y),
+                    Err(y) => Err(SharedImpl::ReadCopyUpdate(x, Arc::new(RwLock::new(y)))),
+                },
+                Err(y) => Err(SharedImpl::ReadCopyUpdate(x, y)),
             },
             SharedImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
                 Ok(x) => Ok(policy.check(&x.0, x.1.into_inner())),
@@ -101,7 +115,11 @@ impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self {
             SharedImpl::Arc(x) => SharedReadLock {
-                inner: SharedReadLockInner::Arc(x),
+                inner: SharedReadLockInner::ArcRef(x),
+                poison: None,
+            },
+            SharedImpl::ReadCopyUpdate(_, lock) => SharedReadLock {
+                inner: SharedReadLockInner::ReadCopyUpdate(lock.read().clone()),
                 poison: None,
             },
             SharedImpl::RwLock(policy, lock) => SharedReadLock {
@@ -124,6 +142,13 @@ impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self {
             SharedImpl::Arc(_) => unreachable!("This should not be possible"),
+            SharedImpl::ReadCopyUpdate(cloner, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::ReadCopyUpdate(
+                    lock.deref(),
+                    Some(cloner(&*lock.read())),
+                ),
+                poison: None,
+            },
             SharedImpl::RwLock(policy, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(policy.check(&lock.0, lock.1.write())),
                 poison: policy.get_poison(&lock.0),

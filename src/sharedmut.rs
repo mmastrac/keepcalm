@@ -198,6 +198,21 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
     }
 }
 
+impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
+    /// Creates a [`SharedMut`] that updates only when the write lock is dropped. This style of synchronization trades off expensive write operations (one clone, plus
+    /// the final memory copy on commit) for extremely short lock times. In addition, a steady volume of writes with a steady volume of reads could result in large
+    /// memory usage as multiple copies of the object may be kept in memory.
+    ///
+    /// Neither readers nor writers hold long-term locks on the underlying data, making the contention on this structure much lower than other styles.
+    pub fn new_read_copy_update(t: T) -> SharedMut<T> {
+        let cloner = |x: &Arc<T>| Box::new((**x).clone());
+        make_shared_rw_value::<T, T>(SharedImpl::ReadCopyUpdate(
+            Arc::new(cloner),
+            Arc::new(RwLock::new(Arc::new(t))),
+        ))
+    }
+}
+
 impl<T> SharedMut<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
@@ -327,6 +342,23 @@ mod test {
         assert!(matches!(shared.try_unwrap(), Err(_)));
         // We can now unwrap
         assert!(matches!(shared2.try_unwrap(), Ok(_)));
+    }
+
+    #[test]
+    pub fn test_clone_commit() {
+        let shared = SharedMut::new_read_copy_update((1, 2));
+        let read = shared.read();
+
+        let mut write = shared.write();
+        assert_eq!(write.0, 1);
+        write.0 += 10;
+        assert_eq!(write.0, 11);
+
+        assert_eq!(read.0, 1);
+        assert_eq!(shared.read().0, 1);
+        drop(write);
+        assert_eq!(read.0, 1);
+        assert_eq!(shared.read().0, 11);
     }
 
     macro_rules! test_poison_policy {

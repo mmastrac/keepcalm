@@ -1,6 +1,6 @@
-use std::sync::atomic::AtomicBool;
+use std::sync::{atomic::AtomicBool, Arc};
 
-use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 /// UNSAFETY: We can implement this iff T: Send
 unsafe impl<'a, T: Send> Send for SharedReadLockInner<'a, T> {}
@@ -8,7 +8,9 @@ unsafe impl<'a, T: Send> Send for SharedWriteLockInner<'a, T> {}
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
     /// A read "lock" that's just a plain reference.
-    Arc(&'a T),
+    ArcRef(&'a T),
+    /// A read "lock" that's an arc, used for RCU mode.
+    ReadCopyUpdate(Arc<T>),
     /// RwLock's read lock.
     RwLock(RwLockReadGuard<'a, T>),
     /// RwLock's read lock, but for a Box.
@@ -40,6 +42,7 @@ impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
 }
 
 pub enum SharedWriteLockInner<'a, T: ?Sized> {
+    ReadCopyUpdate(&'a RwLock<Arc<T>>, Option<Box<T>>),
     RwLock(RwLockWriteGuard<'a, T>),
     RwLockBox(RwLockWriteGuard<'a, Box<T>>),
     Mutex(MutexGuard<'a, T>),
@@ -61,7 +64,8 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedReadLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use SharedReadLockInner::*;
         match &self.inner {
-            Arc(x) => x,
+            ArcRef(x) => x,
+            ReadCopyUpdate(x) => x,
             RwLock(x) => x,
             RwLockBox(x) => x,
             Mutex(x) => x,
@@ -75,6 +79,7 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedWriteLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use SharedWriteLockInner::*;
         match &self.inner {
+            ReadCopyUpdate(_, x) => x.as_ref().expect("Cannot deref after drop"),
             RwLock(x) => x,
             RwLockBox(x) => x,
             Mutex(x) => x,
@@ -87,6 +92,7 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         use SharedWriteLockInner::*;
         match &mut self.inner {
+            ReadCopyUpdate(_, x) => x.as_mut().expect("Cannot deref after drop"),
             RwLock(x) => &mut *x,
             RwLockBox(x) => &mut *x,
             Mutex(x) => &mut *x,
@@ -100,6 +106,12 @@ impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
         if let Some(poison) = self.poison {
             if std::thread::panicking() {
                 poison.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+
+        if let SharedWriteLockInner::ReadCopyUpdate(a, b) = &mut self.inner {
+            if let Some(b) = b.take() {
+                *a.write() = b.into();
             }
         }
     }
