@@ -6,14 +6,61 @@
 
 Simple shared types for multi-threaded Rust programs.
 
-This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers. The
-traditional Rust shared object patterns tend to be somewhat version, for example:
+This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers.
+
+Advantages of `keepcalm`:
+
+ * You don't need to decide on your synchronization primitives up-front. Everything is a [`Shared`] or [`SharedMut`], no matter whether it's
+ a mutex, read/write lock, read/copy/update primitive, or a read-only shared [`std::sync::Arc`].
+ * Everything is [`project!`]able, which means you can adjust the granularity of your locks at any time without having to refactor the whole
+ system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
+ * Writeable containers can be turned into read-only containers, while still retaining the ability for other code to update the contents.
+
+## Container types
+
+The following container types are available:
+
+| Container                      | Equivalent            | Notes |
+|--------------------------------|-----------------------|-------|
+| SharedMut (RwLock)             | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
+| SharedMut (Mutex)              | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
+| SharedMut (read/copy/update)   | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
+| Shared (default)               | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
+| Shared ([`Shared::new_unsync`])| `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
+| Shared ([`SharedMut::shared`]) | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
+
+## Basic syntax
+
+The traditional Rust shared object patterns tend to be somewhat verbose, for example:
 
 ```rust
 # use std::sync::{Arc, Mutex};
-let object = "123".to_string();
-let shared = Arc::new(Mutex::new(object));
-shared.lock().expect("Mutex was poisoned");
+# fn use_string(s: &str) {}
+struct Foo {
+    my_string: Arc<Mutex<String>>,
+    my_integer: Arc<Mutex<u16>>,
+}
+let foo = Foo {
+    my_string: Arc::new(Mutex::new("123".to_string())),
+    my_integer: Arc::new(Mutex::new(1)),
+};
+use_string(&*foo.my_string.lock().expect("Mutex was poisoned"));
+```
+
+We can reduce a some of the ceremony and verbosity with `keepcalm`:
+
+```rust
+# use keepcalm::*;
+# fn use_string(s: &str) {}
+struct Foo {
+    my_string: SharedMut<String>,
+    my_integer: SharedMut<u16>,
+}
+let foo = Foo {
+    my_string: SharedMut::new("123".to_string()),
+    my_integer: SharedMut::new(1),
+};
+use_string(&*foo.my_string.read());
 ```
 
 ## SharedMut
