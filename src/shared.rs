@@ -216,16 +216,16 @@ mod test {
     #[test]
     pub fn test_shared() {
         let shared = Shared::new(1);
-        assert_eq!(*shared.read(), 1);
+        assert_eq!(shared.read(), 1);
     }
 
     #[test]
     pub fn test_shared_projection() {
         let shared = Shared::new((1, 2));
         let shared_proj = shared.project_fn(|x| &x.0);
-        assert_eq!(*shared_proj.read(), 1);
+        assert_eq!(shared_proj.read(), 1);
         let shared_proj = shared.project_fn(|x| &x.1);
-        assert_eq!(*shared_proj.read(), 2);
+        assert_eq!(shared_proj.read(), 2);
     }
 
     #[test]

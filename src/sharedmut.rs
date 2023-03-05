@@ -281,14 +281,14 @@ mod test {
     pub fn test_shared_rw() {
         let shared = SharedMut::new(1);
         *shared.write() += 1;
-        assert_eq!(*shared.read(), 2);
+        assert_eq!(shared.read(), 2);
     }
 
     #[test]
     pub fn test_shared_rw_mutex() {
         let shared = SharedMut::new_with_type(1, Implementation::Mutex);
         *shared.write() += 1;
-        assert_eq!(*shared.read(), 2);
+        assert_eq!(shared.read(), 2);
     }
 
     #[test]
@@ -300,7 +300,7 @@ mod test {
         *shared_1.write() += 1;
         *shared_2.write() += 10;
 
-        assert_eq!(*shared.read(), (2, 11));
+        assert_eq!(shared.read(), (2, 11));
     }
 
     #[test]
@@ -314,7 +314,7 @@ mod test {
         *shared3.write() += 10;
         (shared2.write().0) += 100;
 
-        assert_eq!(*shared.read(), (1, (102, (3, 14))));
+        assert_eq!(shared.read(), (1, (102, (3, 14))));
     }
 
     #[test]
@@ -401,7 +401,7 @@ mod test {
                 panic!("This is a real panic, expect a backtrace!");
             });
             assert!(res.is_err());
-            assert_eq!(*shared.$dir(), 1);
+            assert_eq!(shared.$dir(), 1);
         };
     }
 
