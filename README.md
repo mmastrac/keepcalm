@@ -36,7 +36,7 @@ The following container types are available:
 
 ## Basic syntax
 
-The traditional Rust shared object patterns tend to be somewhat verbose, for example:
+The traditional Rust shared object patterns tend to be somewhat verbose and repetitive, for example:
 
 ```rust
 # use std::sync::{Arc, Mutex};
@@ -52,7 +52,10 @@ let foo = Foo {
 use_string(&*foo.my_string.lock().expect("Mutex was poisoned"));
 ```
 
-We can reduce a some of the ceremony and verbosity with `keepcalm`:
+If we want to switch our shared fields from [`std::sync::Mutex`] to [`std::sync::RwLock`], we need to change four lines just for types, and
+switch the `lock` method for a `read` method.
+
+We can increase flexibility, and reduce some of the ceremony and verbosity with `keepcalm`:
 
 ```rust
 # use keepcalm::*;
@@ -67,6 +70,9 @@ let foo = Foo {
 };
 use_string(&*foo.my_string.read());
 ```
+
+If we want to use a `Mutex` instead of the default `RwLock` that [`SharedMut`] uses under the hood, we only need to change [`SharedMut::new`] to
+[`SharedMut::new_mutex`]! 
 
 ## SharedMut
 

@@ -75,6 +75,9 @@ impl<A: ?Sized, B: ?Sized> From<ProjectorRW<A, B>> for Projector<A, B> {
 
 /// Project part of a type as another type.
 ///
+/// Given a reference to a type `A`, we can project that into a reference of type `B`, where the reference for `B` comes
+/// from somewhere within `A` (for example: an arbitrarily nested field, part of a tuple, or part of a slice).
+///
 /// ```rust
 /// # use keepcalm::*;
 /// // Creates two projections for each field of a tuple:
@@ -101,6 +104,9 @@ macro_rules! project {
 }
 
 /// Projects a type as another type.
+///
+/// This performs a cast from one type to another, and is useful for creating generic shared objects based on traits rather than
+/// concrete types, and without having to make methods generic.
 ///
 /// ```rust
 /// # use keepcalm::*;

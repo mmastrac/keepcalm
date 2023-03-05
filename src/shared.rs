@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// The default [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project. [`Shared`] objects may also be
 /// constructed as a `Mutex`, or may be a read-only view into a [`SharedMut`].
-/// 
+///
 /// Note that because of this flexibility, the [`Shared`] object is slightly more complex than a traditional [`std::sync::Arc`], as all accesses
 /// must be performed through the [`Shared::read`] accessor.
 #[repr(transparent)]
@@ -145,10 +145,7 @@ impl<T: Send + Sync + 'static> Shared<T> {
     /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
     pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedImpl::Mutex(
-                policy,
-                Arc::new((Default::default(), Mutex::new(t))),
-            ),
+            inner: SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t)))),
         }
     }
 }
