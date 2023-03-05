@@ -5,9 +5,10 @@ use std::{
 
 use parking_lot::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
-/// UNSAFETY: We can implement this iff T: Send
-unsafe impl<'a, T: Send> Send for SharedReadLockInner<'a, T> {}
-unsafe impl<'a, T: Send> Send for SharedWriteLockInner<'a, T> {}
+/// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
+/// projection functions must be Send.
+unsafe impl<'a, T> Send for SharedReadLockInner<'a, T> {}
+unsafe impl<'a, T> Send for SharedWriteLockInner<'a, T> {}
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
     /// A read "lock" that's just a plain reference.
