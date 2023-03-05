@@ -18,19 +18,21 @@ Advantages of `keepcalm`:
  system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
  * Writeable containers can be turned into read-only containers, while still retaining the ability for other code to update the contents.
  * Read and write guards are `Send` thanks to the `parking_lot` crate.
+ * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
+ poison on `panic!`, constructors are available to disable this option entirely.
 
 ## Container types
 
 The following container types are available:
 
-| Container                      | Equivalent            | Notes |
-|--------------------------------|-----------------------|-------|
-| SharedMut (RwLock)             | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
-| SharedMut (Mutex)              | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
-| SharedMut (read/copy/update)   | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
-| Shared (default)               | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
-| Shared ([`Shared::new_unsync`])| `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
-| Shared ([`SharedMut::shared`]) | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
+| Container                 | Equivalent            | Notes |
+|---------------------------|-----------------------|-------|
+| [`SharedMut::new`]        | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
+| [`SharedMut::new_mutex`]  | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
+| [`SharedMut::new_rcu`]    | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
+| [`Shared::new`]           | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
+| [`Shared::new_mutex`]     | `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
+| [`SharedMut::shared`]     | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
 
 ## Basic syntax
 
@@ -89,7 +91,7 @@ fn use_shared(shared: SharedMut<String>) {
 
 let shared = SharedMut::new("123".to_string());
 use_shared(shared);
-let shared = SharedMut::new_with_type("123".to_string(), Implementation::Mutex);
+let shared = SharedMut::new_mutex("123".to_string());
 use_shared(shared);
 ```
 

@@ -121,9 +121,30 @@ impl<T: Send> Shared<T> {
 }
 
 impl<T: Send + Sync + 'static> Shared<T> {
+    /// Create a new [`Shared`], backed by an `Arc` and poisoning on panic.
     pub fn new(t: T) -> Self {
         Self {
             inner: SharedImpl::Arc(Arc::new(t)),
+        }
+    }
+
+    /// Create a new [`Shared`], backed by a `Mutex` and poisoning on panic.
+    pub fn new_mutex(t: T) -> Self {
+        Self {
+            inner: SharedImpl::Mutex(
+                PoisonPolicy::Panic,
+                Arc::new((Default::default(), Mutex::new(t))),
+            ),
+        }
+    }
+
+    /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
+    pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
+        Self {
+            inner: SharedImpl::Mutex(
+                policy,
+                Arc::new((Default::default(), Mutex::new(t))),
+            ),
         }
     }
 }

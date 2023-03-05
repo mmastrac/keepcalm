@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 /// Specifies the underlying synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Implementation {
+enum Implementation {
     RwLock,
     Mutex,
 }
@@ -32,7 +32,7 @@ pub enum Implementation {
 ///
 /// let shared = SharedMut::new("123".to_string());
 /// use_shared(shared);
-/// let shared = SharedMut::new_with_type("123".to_string(), Implementation::Mutex);
+/// let shared = SharedMut::new_mutex("123".to_string());
 /// use_shared(shared);
 /// ```
 ///
@@ -170,19 +170,31 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 // UNSAFETY: All construction functions are gated behind T: Send + Sync to ensure that we cannot
 // construct a SharedMut without the underlying object being thread-safe.
 impl<T: Send + Sync + 'static> SharedMut<T> {
+    /// Create a new [`SharedMut`], backed by a `RwLock` and poisoning on panic.
     pub fn new(t: T) -> SharedMut<T> {
         Self::new_with_type(t, Implementation::RwLock)
     }
 
-    pub fn new_with_type(t: T, implementation: Implementation) -> Self {
+    /// Create a new [`SharedMut`], backed by a `Mutex` and poisoning on panic.
+    pub fn new_mutex(t: T) -> SharedMut<T> {
+        Self::new_with_type(t, Implementation::Mutex)
+    }
+
+    fn new_with_type(t: T, implementation: Implementation) -> Self {
         Self::new_with_type_and_policy(t, implementation, PoisonPolicy::Panic)
     }
 
+    /// Create a new [`SharedMut`], backed by a `RwLock` and optionally poisoning on panic.
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self::new_with_type_and_policy(t, Implementation::RwLock, policy)
     }
 
-    pub fn new_with_type_and_policy(
+    /// Create a new [`SharedMut`], backed by a `Mutex` and optionally poisoning on panic.
+    pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
+        Self::new_with_type_and_policy(t, Implementation::Mutex, policy)
+    }
+
+    fn new_with_type_and_policy(
         t: T,
         implementation: Implementation,
         policy: PoisonPolicy,
@@ -204,7 +216,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
     /// memory usage as multiple copies of the object may be kept in memory.
     ///
     /// Neither readers nor writers hold long-term locks on the underlying data, making the contention on this structure much lower than other styles.
-    pub fn new_read_copy_update(t: T) -> SharedMut<T> {
+    pub fn new_rcu(t: T) -> SharedMut<T> {
         let cloner = |x: &Arc<T>| Box::new((**x).clone());
         make_shared_rw_value::<T, T>(SharedImpl::ReadCopyUpdate(
             Arc::new(cloner),
@@ -346,7 +358,7 @@ mod test {
 
     #[test]
     pub fn test_clone_commit() {
-        let shared = SharedMut::new_read_copy_update((1, 2));
+        let shared = SharedMut::new_rcu((1, 2));
         let read = shared.read();
 
         let mut write = shared.write();
