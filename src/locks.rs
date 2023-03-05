@@ -226,9 +226,10 @@ macro_rules! implement_lock_delegates {
 implement_lock_delegates!(SharedReadLock);
 implement_lock_delegates!(SharedWriteLock);
 
-/// Simple compile_fail test for Send on the read/write locks for non-send types.
+/// Simple test for `Send` on the read/write locks for non-send types. Note that locks are always `Send`, as we
+/// ensure that underlying locked objects are `Send` at construction time.
 ///
-/// ```rust compile_fail
+/// ```rust
 /// fn ensure_send<T: Send + ?Sized>() {}
 /// use keepcalm::SharedReadLock;
 /// pub type Unsync = std::marker::PhantomData<std::cell::Cell<()>>;
@@ -236,9 +237,9 @@ implement_lock_delegates!(SharedWriteLock);
 /// ensure_send::<SharedReadLock<'static, Unsend>>();
 /// ```
 ///
-/// ```rust compile_fail
+/// ```rust
 /// fn ensure_send<T: Send + ?Sized>() {}
-/// use keepcalm::SharedReadLock;
+/// use keepcalm::SharedWriteLock;
 /// pub type Unsync = std::marker::PhantomData<std::cell::Cell<()>>;
 /// pub type Unsend = std::marker::PhantomData<std::sync::MutexGuard<'static, ()>>;
 /// ensure_send::<SharedWriteLock<'static, Unsend>>();
