@@ -15,6 +15,7 @@ Advantages of `keepcalm`:
  * Everything is [`project!`]able, which means you can adjust the granularity of your locks at any time without having to refactor the whole
  system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
  * Writeable containers can be turned into read-only containers, while still retaining the ability for other code to update the contents.
+ * Read and write guards are `Send` thanks to the `parking_lot` crate.
 
 ## Container types
 
@@ -65,7 +66,8 @@ use_string(&*foo.my_string.read());
 
 ## SharedMut
 
-The [`SharedMut`] object hides the complexity of managing `Arc<Mutex<T>>` or `Arc<RwLock<T>>` behind a single interface:
+The [`SharedMut`] object hides the complexity of managing `Arc<Mutex<T>>`, `Arc<RwLock<T>>`, and other synchronization types
+behind a single interface:
 
 ```rust
 # use keepcalm::*;
