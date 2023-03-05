@@ -1,4 +1,7 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::{
+    fmt::Debug,
+    sync::{atomic::AtomicBool, Arc},
+};
 
 use parking_lot::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -21,6 +24,9 @@ pub enum SharedReadLockInner<'a, T: ?Sized> {
     Projection(Box<dyn std::ops::Deref<Target = T> + 'a>),
 }
 
+/// This holds a read lock on the underlying container's object.
+///
+/// The particular behaviour of the lock depends on the underlying synchronization primitive.
 #[must_use = "if unused the lock will immediately unlock"]
 // Waiting for stable: https://github.com/rust-lang/rust/issues/83310
 // #[must_not_suspend = "holding a lock across suspend \
@@ -49,6 +55,9 @@ pub enum SharedWriteLockInner<'a, T: ?Sized> {
     Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
 }
 
+/// This holds a write lock on the underlying container's object.
+///
+/// The particular behaviour of the lock depends on the underlying synchronization primitive.
 #[must_use = "if unused the lock will immediately unlock"]
 // Waiting for stable: https://github.com/rust-lang/rust/issues/83310
 // #[must_not_suspend = "holding a lock across suspend \
@@ -117,6 +126,109 @@ impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
     }
 }
 
+/// Defines some common delegated operations on the underlying values, allowing the consumer to avoid having to dereference the
+/// lock directly. This could likely be made generic rather than using macros.
+macro_rules! implement_lock_delegates {
+    ($for:ident) => {
+        /// Implement Debug where T: Debug.
+        impl<'a, T: ?Sized> std::fmt::Debug for $for<'a, T>
+        where
+            T: Debug,
+        {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                (**self).fmt(f)
+            }
+        }
+
+        /// Implement Display where T: Display.
+        impl<'a, T: ?Sized> std::fmt::Display for $for<'a, T>
+        where
+            T: std::fmt::Display,
+        {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                (**self).fmt(f)
+            }
+        }
+
+        /// Implement Error where T: Error
+        impl<'a, T: ?Sized> std::error::Error for $for<'a, T>
+        where
+            T: std::error::Error,
+        {
+            #[allow(deprecated)]
+            fn cause(&self) -> Option<&dyn std::error::Error> {
+                (**self).cause()
+            }
+
+            #[allow(deprecated)]
+            fn description(&self) -> &str {
+                (**self).description()
+            }
+
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                (**self).source()
+            }
+        }
+
+        /// Implement Borrow
+        impl<'a, T: ?Sized> std::borrow::Borrow<T> for $for<'a, T> {
+            fn borrow(&self) -> &T {
+                &**self
+            }
+        }
+
+        /// Implement AsRef where T: AsRef
+        impl<'a, T: ?Sized, U: ?Sized> AsRef<U> for $for<'a, T>
+        where
+            T: AsRef<U>,
+        {
+            fn as_ref(&self) -> &U {
+                (**self).as_ref()
+            }
+        }
+
+        /// Implement AsMut where T: AsMut
+        impl<'a, T: ?Sized, U: ?Sized> AsMut<U> for $for<'a, T>
+        where
+            T: AsMut<U>,
+            Self: std::ops::DerefMut<Target = T>,
+        {
+            fn as_mut(&mut self) -> &mut U {
+                (**self).as_mut()
+            }
+        }
+
+        /// Implement PartialEq, but only for raw types.
+        impl<'a, T: ?Sized, Rhs: ?Sized> PartialEq<Rhs> for $for<'a, T>
+        where
+            T: PartialEq<Rhs>,
+        {
+            fn eq(&self, other: &Rhs) -> bool {
+                (**self).eq(other)
+            }
+
+            fn ne(&self, other: &Rhs) -> bool {
+                (**self).ne(other)
+            }
+        }
+
+        /// Implement PartialOrd, but only for raw types.
+        impl<'a, T: ?Sized, Rhs: ?Sized> PartialOrd<Rhs> for $for<'a, T>
+        where
+            T: PartialOrd<Rhs>,
+        {
+            fn partial_cmp(&self, other: &Rhs) -> Option<std::cmp::Ordering> {
+                (**self).partial_cmp(other)
+            }
+        }
+
+        impl<'a, T: ?Sized> Unpin for $for<'a, T> {}
+    };
+}
+
+implement_lock_delegates!(SharedReadLock);
+implement_lock_delegates!(SharedWriteLock);
+
 /// Simple compile_fail test for Send on the read/write locks for non-send types.
 ///
 /// ```rust compile_fail
@@ -147,5 +259,15 @@ mod test {
     fn ensure_locks_send<T: Send>() {
         ensure_locks_send::<SharedReadLock<'static, ()>>();
         ensure_locks_send::<SharedWriteLock<'static, ()>>();
+    }
+
+    #[allow(unused)]
+    fn ensure_locks_coerce_deref(read: SharedReadLock<String>) {
+        fn takes_as_ref(_: &String) {}
+        fn takes_as_ref_str(_: &impl AsRef<str>) {}
+
+        takes_as_ref(&read);
+        takes_as_ref_str(&read);
+        read == "123".to_string();
     }
 }
