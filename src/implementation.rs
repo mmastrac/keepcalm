@@ -17,10 +17,8 @@ pub enum PoisonPolicy {
 
 impl PoisonPolicy {
     fn check<T>(&self, poison: &AtomicBool, res: T) -> T {
-        if *self == PoisonPolicy::Panic {
-            if poison.load(std::sync::atomic::Ordering::Acquire) {
-                panic!("This lock was poisoned by a panic elsewhere in the code.");
-            }
+        if *self == PoisonPolicy::Panic && poison.load(std::sync::atomic::Ordering::Acquire) {
+            panic!("This lock was poisoned by a panic elsewhere in the code.");
         }
         res
     }
@@ -36,6 +34,7 @@ impl PoisonPolicy {
 
 type Poison = std::sync::atomic::AtomicBool;
 
+#[allow(clippy::type_complexity)]
 pub enum SharedImpl<T: ?Sized> {
     /// Only usable by non-mutable shares.
     Arc(Arc<T>),

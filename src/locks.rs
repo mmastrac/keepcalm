@@ -206,10 +206,6 @@ macro_rules! implement_lock_delegates {
             fn eq(&self, other: &Rhs) -> bool {
                 (**self).eq(other)
             }
-
-            fn ne(&self, other: &Rhs) -> bool {
-                (**self).ne(other)
-            }
         }
 
         /// Implement PartialOrd, but only for raw types.
