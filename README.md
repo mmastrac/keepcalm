@@ -4,7 +4,9 @@
 [![docs.rs](https://docs.rs/keepcalm/badge.svg)](https://docs.rs/keepcalm)
 [![crates.io](https://img.shields.io/crates/v/keepcalm.svg)](https://crates.io/crates/keepcalm)
 
-Simple shared types for multi-threaded Rust programs.
+Simple shared types for multi-threaded Rust programs: `keepcalm` gives you permission to simplify your synchronization code in concurrent Rust applications.
+
+## Overview
 
 This library simplifies a number of shared-object patterns that are used in multi-threaded programs such as web-servers.
 
