@@ -6,7 +6,7 @@
 
 Simple shared types for multi-threaded Rust programs: `keepcalm` gives you permission to simplify your synchronization code in concurrent Rust applications.
 
-Inspiration: [Keep Calm and Call Clone](https://github.com/luser/keep-calm-and-call-clone)
+Name inspired by @luser's [Keep Calm and Call Clone](https://github.com/luser/keep-calm-and-call-clone).
 
 ## Overview
 
