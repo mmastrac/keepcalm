@@ -22,6 +22,8 @@ Advantages of `keepcalm`:
  * Read and write guards are `Send` thanks to the `parking_lot` crate.
  * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
  poison on `panic!`, constructors are available to disable this option entirely.
+ * `static` Global locks for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
+ containers. ***NOTE**: This requires the `--feature global_experimental` flag*
 
 ## Container types
 
@@ -121,6 +123,24 @@ constructed as a `Mutex`, or may be a read-only view into a [`SharedMut`].
 
 Note that because of this flexibility, the [`Shared`] object is slightly more complex than a traditional [`std::sync::Arc`], as all accesses
 must be performed through the [`Shared::read`] accessor.
+
+## Globals
+
+***NOTE**: This requires the `--feature global_experimental` flag*
+
+Global [`Shared`] references can be created using [`SharedGlobal`].
+
+```rust
+# use keepcalm::*;
+# #[cfg(feature="global_experimental")]
+static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
+
+# #[cfg(feature="global_experimental")]
+fn use_global() {
+    let shared: Shared<usize> = GLOBAL.shared();
+    assert_eq!(shared.read(), 1);
+}
+```
 
 ## Projection
 

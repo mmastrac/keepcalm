@@ -166,6 +166,36 @@ impl<T: ?Sized> SharedImpl<T> {
     }
 }
 
+pub enum SharedGlobalImpl<T: Send> {
+    Raw(T),
+    RwLock(PoisonPolicy, Poison, RwLock<T>),
+    Mutex(PoisonPolicy, Poison, Mutex<T>),
+}
+
+// UNSAFETY: We cannot construct a SharedGlobalImpl that isn't safe to send across thread boundards, so we force this be to Send + Sync
+unsafe impl<T: Send> Send for SharedGlobalImpl<T> {}
+unsafe impl<T: Send> Sync for SharedGlobalImpl<T> {}
+
+impl<T: Send> SharedGlobalImpl<T> {}
+
+impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
+    fn read(&self) -> SharedReadLock<T> {
+        match self {
+            SharedGlobalImpl::Raw(x) => SharedReadLock {
+                inner: SharedReadLockInner::ArcRef(x),
+                poison: None,
+            },
+            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(policy.check(&poison, lock.lock())),
+                poison: policy.get_poison(&poison),
+            },
+        }
+    }
+}
 pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
     fn lock_write(&self) -> SharedWriteLock<T>;

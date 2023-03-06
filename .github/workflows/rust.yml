@@ -17,6 +17,6 @@ jobs:
     - name: Build (default)
       run: cargo build --verbose
     - name: Run tests (all features)
-      run: cargo test --features=serde --verbose
+      run: cargo test --all-features --verbose
     - name: Run docs
-      run: cargo doc --features=serde --verbose
+      run: cargo doc --all-features --verbose

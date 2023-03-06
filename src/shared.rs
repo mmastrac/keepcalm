@@ -115,11 +115,18 @@ impl<T: Send> Shared<T> {
     /// Shared::new_unsync(Unsync {});
     /// ```
     pub fn new_unsync(t: T) -> Self {
+        Self::new_mutex(t)
+    }
+
+    /// Create a new [`Shared`], backed by a `Mutex` and poisoning on panic.
+    pub fn new_mutex(t: T) -> Self {
+        Self::new_mutex_with_policy(t, PoisonPolicy::Panic)
+    }
+
+    /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
+    pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedImpl::Mutex(
-                PoisonPolicy::Panic,
-                Arc::new((Default::default(), Mutex::new(t))),
-            ),
+            inner: SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t)))),
         }
     }
 }
@@ -129,23 +136,6 @@ impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
             inner: SharedImpl::Arc(Arc::new(t)),
-        }
-    }
-
-    /// Create a new [`Shared`], backed by a `Mutex` and poisoning on panic.
-    pub fn new_mutex(t: T) -> Self {
-        Self {
-            inner: SharedImpl::Mutex(
-                PoisonPolicy::Panic,
-                Arc::new((Default::default(), Mutex::new(t))),
-            ),
-        }
-    }
-
-    /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
-    pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        Self {
-            inner: SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t)))),
         }
     }
 }
