@@ -4,14 +4,15 @@ use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    implementation::{SharedGlobalImpl, SharedImpl},
-    PoisonPolicy, Shared, SharedMut,
+    implementation::{SharedGlobalImpl, SharedImpl, SharedMutProjection},
+    PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
 };
 
 /// A global version of [`SharedMut`]. Use [`SharedGlobalMut::shared`] to get a [`Shared`] to access the contents, or [`SharedGlobalMut::shared_mut`] to
 /// get a [`SharedMut`].
 pub struct SharedGlobalMut<T: Send> {
     inner: SharedGlobalImpl<T>,
+    projection: OnceCell<Arc<dyn SharedMutProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobalMut<T> {
@@ -23,6 +24,7 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
                 AtomicBool::new(false),
                 RwLock::new(t),
             ),
+            projection: OnceCell::new(),
         }
     }
 
@@ -35,6 +37,7 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
                 OnceCell::new(),
                 f,
             ),
+            projection: OnceCell::new(),
         }
     }
 }
@@ -77,6 +80,7 @@ impl<T: Send> SharedGlobalMut<T> {
                 OnceCell::new(),
                 f,
             ),
+            projection: OnceCell::new(),
         }
     }
 
@@ -89,38 +93,55 @@ impl<T: Send> SharedGlobalMut<T> {
     pub const fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
             inner: SharedGlobalImpl::Mutex(policy, AtomicBool::new(false), Mutex::new(t)),
+            projection: OnceCell::new(),
         }
     }
 
     /// Create a [`Shared`] reference, backed by this global. Note that the [`Shared`] cannot be unwrapped.
     pub fn shared(&'static self) -> Shared<T> {
         // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
-        SharedImpl::ProjectionRO(Arc::new(&self.inner)).into()
+        SharedImpl::Projection(
+            self.projection
+                .get_or_init(|| Arc::new(&self.inner))
+                .clone(),
+        )
+        .into()
     }
 
     /// Create a [`SharedMut`] reference, backed by this global. Note that the [`SharedMut`] cannot be unwrapped.
     pub fn shared_mut(&'static self) -> SharedMut<T> {
         // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
-        SharedImpl::Projection(Arc::new(&self.inner)).into()
+        SharedImpl::Projection(
+            self.projection
+                .get_or_init(|| Arc::new(&self.inner))
+                .clone(),
+        )
+        .into()
+    }
+
+    /// Lock the global [`SharedGlobalMut`] for reading directly.
+    pub fn read(&'static self) -> SharedReadLock<T> {
+        self.inner.read()
+    }
+
+    /// Lock the global [`SharedGlobalMut`] for writing directly.
+    pub fn write(&'static self) -> SharedWriteLock<T> {
+        self.inner.write()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use super::*;
-
+    use std::collections::HashMap;
     pub type Unsync = std::cell::Cell<()>;
-
-    static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
-    static GLOBAL_UNSYNC: SharedGlobalMut<Unsync> =
-        SharedGlobalMut::new_unsync(std::cell::Cell::new(()));
-    static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
-        SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 
     #[test]
     fn test_global() {
+        static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
+        static GLOBAL_UNSYNC: SharedGlobalMut<Unsync> =
+            SharedGlobalMut::new_unsync(std::cell::Cell::new(()));
+
         let shared = GLOBAL.shared_mut();
         let shared2 = GLOBAL.shared();
         assert_eq!(shared.read(), 1);
@@ -135,10 +156,33 @@ mod test {
     }
 
     #[test]
+    fn test_global_direct() {
+        static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
+        static GLOBAL_UNSYNC: SharedGlobalMut<Unsync> =
+            SharedGlobalMut::new_unsync(std::cell::Cell::new(()));
+
+        assert_eq!(GLOBAL.read(), 1);
+        *GLOBAL.write() = 2;
+        assert_eq!(GLOBAL.read(), 2);
+
+        assert_eq!(GLOBAL_UNSYNC.read().get(), ());
+        GLOBAL_UNSYNC.write().set(());
+        assert_eq!(GLOBAL_UNSYNC.read().get(), ());
+    }
+
+    #[test]
     fn test_global_lazy() {
+        static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
+            SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
+
+        assert_eq!(GLOBAL_LAZY.read().len(), 2);
+
         let shared = GLOBAL_LAZY.shared_mut();
         assert_eq!(shared.read().len(), 2);
         shared.write().insert("c", 3);
-        assert_eq!(shared.read().len(), 3);
+        GLOBAL_LAZY.write().insert("d", 4);
+        assert_eq!(shared.read().len(), 4);
+
+        assert_eq!(GLOBAL_LAZY.read().len(), 4);
     }
 }

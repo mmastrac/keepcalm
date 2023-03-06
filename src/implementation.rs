@@ -190,43 +190,8 @@ unsafe impl<T: Send> Sync for SharedGlobalImpl<T> {}
 
 impl<T: Send> SharedGlobalImpl<T> {}
 
-impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
-    fn read(&self) -> SharedReadLock<T> {
-        match self {
-            SharedGlobalImpl::Raw(x) => SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(x),
-                poison: None,
-            },
-            SharedGlobalImpl::RawLazy(once, f) => SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(once.get_or_init(f)),
-                poison: None,
-            },
-            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(poison, lock.read())),
-                poison: policy.get_poison(poison),
-            },
-            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(
-                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).read()),
-                ),
-                poison: policy.get_poison(poison),
-            },
-            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
-                poison: policy.get_poison(poison),
-            },
-            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(
-                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
-                ),
-                poison: policy.get_poison(poison),
-            },
-        }
-    }
-}
-
-impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
-    fn lock_read(&self) -> SharedReadLock<T> {
+impl<T: Send> SharedGlobalImpl<T> {
+    pub(crate) fn read(&self) -> SharedReadLock<T> {
         match self {
             SharedGlobalImpl::Raw(x) => SharedReadLock {
                 inner: SharedReadLockInner::ArcRef(x),
@@ -259,7 +224,7 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
         }
     }
 
-    fn lock_write(&self) -> SharedWriteLock<T> {
+    pub(crate) fn write(&self) -> SharedWriteLock<T> {
         match self {
             SharedGlobalImpl::Raw(_) => unreachable!("Raw objects are never writable"),
             SharedGlobalImpl::RawLazy(..) => unreachable!("Raw objects are never writable"),
@@ -287,6 +252,22 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
     }
 }
 
+impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
+    fn read(&self) -> SharedReadLock<T> {
+        (*self).read()
+    }
+}
+
+impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
+    fn lock_read(&self) -> SharedReadLock<T> {
+        (*self).read()
+    }
+
+    fn lock_write(&self) -> SharedWriteLock<T> {
+        (*self).write()
+    }
+}
+
 pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
     fn lock_write(&self) -> SharedWriteLock<T>;
@@ -294,4 +275,10 @@ pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
 
 pub trait SharedProjection<T: ?Sized>: Send + Sync {
     fn read(&self) -> SharedReadLock<T>;
+}
+
+impl<T: ?Sized> SharedProjection<T> for dyn SharedMutProjection<T> {
+    fn read(&self) -> SharedReadLock<T> {
+        self.lock_read()
+    }
 }

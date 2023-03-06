@@ -4,13 +4,14 @@ use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
 use crate::{
-    implementation::{SharedGlobalImpl, SharedImpl},
-    PoisonPolicy, Shared,
+    implementation::{SharedGlobalImpl, SharedImpl, SharedProjection},
+    PoisonPolicy, Shared, SharedReadLock,
 };
 
 /// A global version of [`Shared`]. Use [`SharedGlobal::shared`] to get a [`Shared`] to access the contents.
 pub struct SharedGlobal<T: Send> {
     inner: SharedGlobalImpl<T>,
+    projection: OnceCell<Arc<dyn SharedProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobal<T> {
@@ -18,6 +19,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
     pub const fn new(t: T) -> Self {
         Self {
             inner: SharedGlobalImpl::Raw(t),
+            projection: OnceCell::new(),
         }
     }
 
@@ -25,6 +27,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::RawLazy(OnceCell::new(), f),
+            projection: OnceCell::new(),
         }
     }
 }
@@ -67,6 +70,7 @@ impl<T: Send> SharedGlobal<T> {
                 OnceCell::new(),
                 f,
             ),
+            projection: OnceCell::new(),
         }
     }
 
@@ -79,22 +83,31 @@ impl<T: Send> SharedGlobal<T> {
     pub const fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
             inner: SharedGlobalImpl::Mutex(policy, AtomicBool::new(false), Mutex::new(t)),
+            projection: OnceCell::new(),
         }
     }
 
     /// Create a [`Shared`] reference, backed by this global. Note that the [`Shared`] cannot be unwrapped.
     pub fn shared(&'static self) -> Shared<T> {
         // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
-        SharedImpl::ProjectionRO(Arc::new(&self.inner)).into()
+        SharedImpl::ProjectionRO(
+            self.projection
+                .get_or_init(|| Arc::new(&self.inner))
+                .clone(),
+        )
+        .into()
+    }
+
+    /// Lock the global [`SharedGlobal`] for reading directly.
+    pub fn read(&'static self) -> SharedReadLock<T> {
+        self.inner.read()
     }
 }
 
 #[cfg(test)]
 mod test {
-    use std::collections::HashMap;
-
     use super::SharedGlobal;
-
+    use std::collections::HashMap;
     pub type Unsync = std::cell::Cell<()>;
 
     static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
@@ -111,8 +124,19 @@ mod test {
     }
 
     #[test]
+    fn test_global_direct() {
+        assert_eq!(GLOBAL.read(), 1);
+        assert_eq!(GLOBAL_UNSYNC.read().get(), ());
+    }
+
+    #[test]
     fn test_global_lazy() {
         let shared = GLOBAL_LAZY.shared();
         assert_eq!(shared.read().len(), 2);
+    }
+
+    #[test]
+    fn test_global_lazy_direct() {
+        assert_eq!(GLOBAL_LAZY.read().len(), 2);
     }
 }

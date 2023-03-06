@@ -151,6 +151,10 @@ static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
 
 # #[cfg(feature="global_experimental")]
 fn use_global() {
+    assert_eq!(GLOBAL.read(), 1);
+
+    // ... or ...
+
     let shared: Shared<usize> = GLOBAL.shared();
     assert_eq!(shared.read(), 1);
 }
@@ -165,6 +169,11 @@ static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
 
 # #[cfg(feature="global_experimental")]
 fn use_global() {
+    *GLOBAL.write() = 12;
+    assert_eq!(GLOBAL.read(), 12);
+
+    // ... or ...
+
     let shared: SharedMut<usize> = GLOBAL.shared_mut();
     *shared.write() = 12;
     assert_eq!(shared.read(), 12);
