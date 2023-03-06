@@ -67,6 +67,19 @@ impl<T: Send> SharedGlobalMut<T> {
         Self::new_mutex(t)
     }
 
+    /// The [`SharedGlobalMut::new_lazy`] function requires a type that is both `Send + Sync`. If this is not possible, you may call
+    /// [`SharedGlobalMut::new_lazy`] to create a [`SharedGlobalMut`] implementation that uses a [`Mutex`].
+    pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
+        Self {
+            inner: SharedGlobalImpl::MutexLazy(
+                PoisonPolicy::Panic,
+                AtomicBool::new(false),
+                OnceCell::new(),
+                f,
+            ),
+        }
+    }
+
     /// Create a new [`SharedGlobalMut`], backed by a `Mutex` and poisoning on panic.
     pub const fn new_mutex(t: T) -> Self {
         Self::new_mutex_with_policy(t, PoisonPolicy::Panic)

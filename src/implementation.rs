@@ -181,6 +181,7 @@ pub enum SharedGlobalImpl<T: Send> {
     RwLock(PoisonPolicy, Poison, RwLock<T>),
     RwLockLazy(PoisonPolicy, Poison, OnceCell<RwLock<T>>, fn() -> T),
     Mutex(PoisonPolicy, Poison, Mutex<T>),
+    MutexLazy(PoisonPolicy, Poison, OnceCell<Mutex<T>>, fn() -> T),
 }
 
 // UNSAFETY: We cannot construct a SharedGlobalImpl that isn't safe to send across thread boundards, so we force this be to Send + Sync
@@ -214,6 +215,12 @@ impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
                 inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
                 poison: policy.get_poison(poison),
             },
+            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(
+                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
+                ),
+                poison: policy.get_poison(poison),
+            },
         }
     }
 }
@@ -243,6 +250,12 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
                 inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
                 poison: policy.get_poison(poison),
             },
+            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(
+                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
+                ),
+                poison: policy.get_poison(poison),
+            },
         }
     }
 
@@ -262,6 +275,12 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::Mutex(policy.check(poison, lock.lock())),
+                poison: policy.get_poison(poison),
+            },
+            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedWriteLock {
+                inner: SharedWriteLockInner::Mutex(
+                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
+                ),
                 poison: policy.get_poison(poison),
             },
         }
