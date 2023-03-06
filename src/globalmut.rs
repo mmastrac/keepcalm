@@ -1,5 +1,6 @@
 use std::sync::{atomic::AtomicBool, Arc};
 
+use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
@@ -14,12 +15,25 @@ pub struct SharedGlobalMut<T: Send> {
 }
 
 impl<T: Send + Sync> SharedGlobalMut<T> {
+    /// Create a new [`SharedGlobalMut`].
     pub const fn new(t: T) -> Self {
         Self {
             inner: SharedGlobalImpl::RwLock(
                 PoisonPolicy::Panic,
                 AtomicBool::new(false),
                 RwLock::new(t),
+            ),
+        }
+    }
+
+    /// Create a new, lazy [`SharedGlobalMut`] implementation that will be initialized on the first access.
+    pub const fn new_lazy(f: fn() -> T) -> Self {
+        Self {
+            inner: SharedGlobalImpl::RwLockLazy(
+                PoisonPolicy::Panic,
+                AtomicBool::new(false),
+                OnceCell::new(),
+                f,
             ),
         }
     }
@@ -80,6 +94,8 @@ impl<T: Send> SharedGlobalMut<T> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use super::*;
 
     pub type Unsync = std::cell::Cell<()>;
@@ -87,6 +103,8 @@ mod test {
     static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
     static GLOBAL_UNSYNC: SharedGlobalMut<Unsync> =
         SharedGlobalMut::new_unsync(std::cell::Cell::new(()));
+    static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
+        SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 
     #[test]
     fn test_global() {
@@ -101,5 +119,13 @@ mod test {
         assert_eq!(shared.read().get(), ());
         shared.write().set(());
         assert_eq!(shared.read().get(), ());
+    }
+
+    #[test]
+    fn test_global_lazy() {
+        let shared = GLOBAL_LAZY.shared_mut();
+        assert_eq!(shared.read().len(), 2);
+        shared.write().insert("c", 3);
+        assert_eq!(shared.read().len(), 3);
     }
 }

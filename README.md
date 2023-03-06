@@ -29,18 +29,20 @@ Advantages of `keepcalm`:
 
 The following container types are available:
 
-| Container                      | Equivalent            | Notes |
-|--------------------------------|-----------------------|-------|
-| [`SharedMut::new`]             | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
-| [`SharedMut::new_mutex`]       | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
-| [`SharedMut::new_rcu`]         | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
-| [`Shared::new`]                | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
-| [`Shared::new_mutex`]          | `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
-| [`SharedMut::shared`]          | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
-| [`SharedGlobal::new`]          | `static T`            | This is a global `const`-style object, for types that are `Send` + `Sync`.
-| [`SharedGlobal::new_mutex`]    | `static Mutex<T>`     | This is a global `const`-style object, for types that are `Send` but not necessarily `Sync`
-| [`SharedGlobalMut::new`]       | `static RwLock<T>`    | This is a global mutable object, for types that are `Send` + `Sync`.
-| [`SharedGlobalMut::new_mutex`] | `static Mutex<T>`     | This is a global mutable object, for types that are `Send` but not necessarily `Sync`.
+| Container                      | Equivalent               | Notes |
+|--------------------------------|--------------------------|-------|
+| [`SharedMut::new`]             | `Arc<RwLock<T>>`         | This is the default shared-mutable type.
+| [`SharedMut::new_mutex`]       | `Arc<Mutex<T>>`          | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
+| [`SharedMut::new_rcu`]         | `Arc<RwLock<Arc<T>`      | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
+| [`Shared::new`]                | `Arc`                    | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
+| [`Shared::new_mutex`]          | `Arc<Mutex<T>>`          | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
+| [`SharedMut::shared`]          | n/a                      | This provides a read-only view into a read-write container and has no direct equivalent.
+| [`SharedGlobal::new`]          | `static T`               | This is a global `const`-style object, for types that are `Send` + `Sync`.
+| [`SharedGlobal::new_lazy`]     | `static Lazy<T>`         | This is a lazily-initialized global `const`-style object, for types that are `Send` + `Sync`.
+| [`SharedGlobal::new_mutex`]    | `static Mutex<T>`        | This is a global `const`-style object, for types that are `Send` but not necessarily `Sync`
+| [`SharedGlobalMut::new`]       | `static RwLock<T>`       | This is a global mutable object, for types that are `Send` + `Sync`.
+| [`SharedGlobalMut::new_lazy`]  | `static Lazy<RwLock<T>>` | This is a lazily-initialized global mutable object, for types that are `Send` + `Sync`.
+| [`SharedGlobalMut::new_mutex`] | `static Mutex<T>`        | This is a global mutable object, for types that are `Send` but not necessarily `Sync`.
 
 ## Basic syntax
 
@@ -162,6 +164,16 @@ fn use_global() {
     *shared.write() = 12;
     assert_eq!(shared.read(), 12);
 }
+```
+
+Both [`SharedGlobal`] and [`SharedGlobalMut`] offer a `new_lazy` constructor that allows initialization to be deferred to first
+access:
+
+```rust
+# use keepcalm::*;
+# use std::collections::HashMap;
+static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
+    SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
 
 ## Projection

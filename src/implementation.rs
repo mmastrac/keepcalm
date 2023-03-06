@@ -1,4 +1,5 @@
 use crate::locks::*;
+use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 use std::{
     ops::Deref,
@@ -176,7 +177,9 @@ impl<T: ?Sized> SharedImpl<T> {
 
 pub enum SharedGlobalImpl<T: Send> {
     Raw(T),
+    RawLazy(OnceCell<T>, fn() -> T),
     RwLock(PoisonPolicy, Poison, RwLock<T>),
+    RwLockLazy(PoisonPolicy, Poison, OnceCell<RwLock<T>>, fn() -> T),
     Mutex(PoisonPolicy, Poison, Mutex<T>),
 }
 
@@ -193,8 +196,18 @@ impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
                 inner: SharedReadLockInner::ArcRef(x),
                 poison: None,
             },
+            SharedGlobalImpl::RawLazy(once, f) => SharedReadLock {
+                inner: SharedReadLockInner::ArcRef(once.get_or_init(f)),
+                poison: None,
+            },
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(
+                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).read()),
+                ),
                 poison: policy.get_poison(&poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
@@ -212,8 +225,18 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
                 inner: SharedReadLockInner::ArcRef(x),
                 poison: None,
             },
+            SharedGlobalImpl::RawLazy(once, f) => SharedReadLock {
+                inner: SharedReadLockInner::ArcRef(once.get_or_init(f)),
+                poison: None,
+            },
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(
+                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).read()),
+                ),
                 poison: policy.get_poison(&poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
@@ -226,8 +249,15 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
     fn lock_write(&self) -> SharedWriteLock<T> {
         match self {
             SharedGlobalImpl::Raw(_) => unreachable!("Raw objects are never writable"),
+            SharedGlobalImpl::RawLazy(..) => unreachable!("Raw objects are never writable"),
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(policy.check(&poison, lock.write())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedWriteLock {
+                inner: SharedWriteLockInner::RwLock(
+                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).write()),
+                ),
                 poison: policy.get_poison(&poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {

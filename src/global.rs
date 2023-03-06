@@ -1,5 +1,6 @@
 use std::sync::{atomic::AtomicBool, Arc};
 
+use once_cell::sync::OnceCell;
 use parking_lot::Mutex;
 
 use crate::{
@@ -13,9 +14,17 @@ pub struct SharedGlobal<T: Send> {
 }
 
 impl<T: Send + Sync> SharedGlobal<T> {
+    /// Create a new [`SharedGlobal`].
     pub const fn new(t: T) -> Self {
         Self {
             inner: SharedGlobalImpl::Raw(t),
+        }
+    }
+
+    /// Create a new, lazy [`SharedGlobal`] implementation that will be initialized on the first access.
+    pub const fn new_lazy(f: fn() -> T) -> Self {
+        Self {
+            inner: SharedGlobalImpl::RawLazy(OnceCell::new(), f),
         }
     }
 }
@@ -69,12 +78,16 @@ impl<T: Send> SharedGlobal<T> {
 
 #[cfg(test)]
 mod test {
+    use std::collections::HashMap;
+
     use super::SharedGlobal;
 
     pub type Unsync = std::cell::Cell<()>;
 
     static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
     static GLOBAL_UNSYNC: SharedGlobal<Unsync> = SharedGlobal::new_unsync(std::cell::Cell::new(()));
+    static GLOBAL_LAZY: SharedGlobal<HashMap<&str, usize>> =
+        SharedGlobal::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 
     #[test]
     fn test_global() {
@@ -82,5 +95,11 @@ mod test {
         assert_eq!(shared.read(), 1);
         let shared = GLOBAL_UNSYNC.shared();
         assert_eq!(shared.read().get(), ());
+    }
+
+    #[test]
+    fn test_global_lazy() {
+        let shared = GLOBAL_LAZY.shared();
+        assert_eq!(shared.read().len(), 2);
     }
 }
