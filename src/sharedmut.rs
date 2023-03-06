@@ -206,7 +206,7 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
             ImplementationMut::RwLock => {
                 SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
             }
-            ImplementationMut::RCU => unimplemented!("Use SharedMut::new_rcu instead"),
+            ImplementationMut::Rcu => unimplemented!("Use SharedMut::new_rcu instead"),
         })
     }
 }
@@ -218,7 +218,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
     ///
     /// Neither readers nor writers hold long-term locks on the underlying data, making the contention on this structure much lower than other styles.
     pub fn new_rcu(t: T) -> SharedMut<T> {
-        Self::new_cloneable_with_type_and_policy(t, ImplementationMut::RCU, PoisonPolicy::Ignore)
+        Self::new_cloneable_with_type_and_policy(t, ImplementationMut::Rcu, PoisonPolicy::Ignore)
     }
 
     fn new_cloneable_with_type_and_policy(
@@ -233,7 +233,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
             ImplementationMut::RwLock => {
                 SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
             }
-            ImplementationMut::RCU => {
+            ImplementationMut::Rcu => {
                 let cloner = |x: &Arc<T>| Box::new((**x).clone());
                 SharedImpl::ReadCopyUpdate(Arc::new(cloner), Arc::new(RwLock::new(Arc::new(t))))
             }
@@ -435,7 +435,7 @@ mod test {
 
     test_poison_policy!(test_poison_policy_mutex_ignore, Mutex, Ignore);
     test_poison_policy!(test_poison_policy_rwlock_ignore, RwLock, Ignore);
-    test_poison_policy!(test_poison_policy_rcu_ignore, RCU, Ignore);
+    test_poison_policy!(test_poison_policy_rcu_ignore, Rcu, Ignore);
     test_poison_policy!(test_poison_policy_mutex_panic, Mutex, Panic);
     test_poison_policy!(test_poison_policy_rwlock_panic, RwLock, Panic);
 

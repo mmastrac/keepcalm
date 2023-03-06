@@ -266,6 +266,6 @@ mod test {
 
         takes_as_ref(&read);
         takes_as_ref_str(&read);
-        read == "123".to_string();
+        assert!(read == *"123");
     }
 }

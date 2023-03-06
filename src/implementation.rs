@@ -11,7 +11,7 @@ use std::{
 pub(crate) enum ImplementationMut {
     RwLock,
     Mutex,
-    RCU,
+    Rcu,
 }
 
 /// Determines what should happen if the underlying synchronization primitive is poisoned by being held during
@@ -201,18 +201,18 @@ impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
                 poison: None,
             },
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
-                poison: policy.get_poison(&poison),
+                inner: SharedReadLockInner::RwLock(policy.check(poison, lock.read())),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(
-                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).read()),
+                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).read()),
                 ),
-                poison: policy.get_poison(&poison),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(&poison, lock.lock())),
-                poison: policy.get_poison(&poison),
+                inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
+                poison: policy.get_poison(poison),
             },
         }
     }
@@ -230,18 +230,18 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
                 poison: None,
             },
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
-                poison: policy.get_poison(&poison),
+                inner: SharedReadLockInner::RwLock(policy.check(poison, lock.read())),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(
-                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).read()),
+                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).read()),
                 ),
-                poison: policy.get_poison(&poison),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(&poison, lock.lock())),
-                poison: policy.get_poison(&poison),
+                inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
+                poison: policy.get_poison(poison),
             },
         }
     }
@@ -251,18 +251,18 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
             SharedGlobalImpl::Raw(_) => unreachable!("Raw objects are never writable"),
             SharedGlobalImpl::RawLazy(..) => unreachable!("Raw objects are never writable"),
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(policy.check(&poison, lock.write())),
-                poison: policy.get_poison(&poison),
+                inner: SharedWriteLockInner::RwLock(policy.check(poison, lock.write())),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(
-                    policy.check(&poison, once.get_or_init(|| RwLock::new(f())).write()),
+                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).write()),
                 ),
-                poison: policy.get_poison(&poison),
+                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(policy.check(&poison, lock.lock())),
-                poison: policy.get_poison(&poison),
+                inner: SharedWriteLockInner::Mutex(policy.check(poison, lock.lock())),
+                poison: policy.get_poison(poison),
             },
         }
     }
