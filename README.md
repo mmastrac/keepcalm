@@ -172,6 +172,7 @@ access:
 ```rust
 # use keepcalm::*;
 # use std::collections::HashMap;
+# #[cfg(feature="global_experimental")]
 static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
     SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
