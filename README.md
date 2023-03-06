@@ -22,21 +22,25 @@ Advantages of `keepcalm`:
  * Read and write guards are `Send` thanks to the `parking_lot` crate.
  * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
  poison on `panic!`, constructors are available to disable this option entirely.
- * `static` Global locks for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
- containers. ***NOTE**: This requires the `--feature global_experimental` flag*
+ * `static` Globally-scoped containers for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
+ containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].  ***NOTE**: This requires the `--feature global_experimental` flag*
 
 ## Container types
 
 The following container types are available:
 
-| Container                 | Equivalent            | Notes |
-|---------------------------|-----------------------|-------|
-| [`SharedMut::new`]        | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
-| [`SharedMut::new_mutex`]  | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
-| [`SharedMut::new_rcu`]    | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
-| [`Shared::new`]           | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
-| [`Shared::new_mutex`]     | `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
-| [`SharedMut::shared`]     | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
+| Container                      | Equivalent            | Notes |
+|--------------------------------|-----------------------|-------|
+| [`SharedMut::new`]             | `Arc<RwLock<T>>`      | This is the default shared-mutable type.
+| [`SharedMut::new_mutex`]       | `Arc<Mutex<T>>`       | In some cases it may be necessary to serialize both read and writes. For example, with types that are not `Sync`.
+| [`SharedMut::new_rcu`]         | `Arc<RwLock<Arc<T>`   | When the write lock of an RCU container is dropped, the values written are committed to the value in the container.
+| [`Shared::new`]                | `Arc`                 | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
+| [`Shared::new_mutex`]          | `Arc<Mutex<T>>`       | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
+| [`SharedMut::shared`]          | n/a                   | This provides a read-only view into a read-write container and has no direct equivalent.
+| [`SharedGlobal::new`]          | `static T`            | This is a global `const`-style object, for types that are `Send` + `Sync`.
+| [`SharedGlobal::new_mutex`]    | `static Mutex<T>`     | This is a global `const`-style object, for types that are `Send` but not necessarily `Sync`
+| [`SharedGlobalMut::new`]       | `static RwLock<T>`    | This is a global mutable object, for types that are `Send` + `Sync`.
+| [`SharedGlobalMut::new_mutex`] | `static Mutex<T>`     | This is a global mutable object, for types that are `Send` but not necessarily `Sync`.
 
 ## Basic syntax
 
@@ -128,7 +132,10 @@ must be performed through the [`Shared::read`] accessor.
 
 ***NOTE**: This requires the `--feature global_experimental` flag*
 
-Global [`Shared`] references can be created using [`SharedGlobal`].
+While `static` globals may often be an anti-pattern in Rust, this library also offers easily-to-use alternatives that are compatible with
+the [`Shared`] and [`SharedMut`] types.
+
+Global [`Shared`] references can be created using [`SharedGlobal`]:
 
 ```rust
 # use keepcalm::*;
@@ -139,6 +146,21 @@ static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
 fn use_global() {
     let shared: Shared<usize> = GLOBAL.shared();
     assert_eq!(shared.read(), 1);
+}
+```
+
+Similarly, global [`SharedMut`] references can be created using [`SharedGlobalMut`]:
+
+```rust
+# use keepcalm::*;
+# #[cfg(feature="global_experimental")]
+static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
+
+# #[cfg(feature="global_experimental")]
+fn use_global() {
+    let shared: SharedMut<usize> = GLOBAL.shared_mut();
+    *shared.write() = 12;
+    assert_eq!(shared.read(), 12);
 }
 ```
 

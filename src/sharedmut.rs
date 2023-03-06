@@ -5,13 +5,6 @@ use crate::Shared;
 use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
-/// Specifies the underlying synchronization primitive.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Implementation {
-    RwLock,
-    Mutex,
-}
-
 /// The [`SharedMut`] object hides the complexity of managing `Arc<Mutex<T>>` or `Arc<RwLock<T>>` behind a single interface:
 ///
 /// ```rust
@@ -66,6 +59,13 @@ fn make_shared_rw_value<U: Send + Sync, T: ?Sized>(inner_impl: SharedImpl<T>) ->
 // UNSAFETY: Projections are always Send + Sync safe.
 fn make_shared_rw_projection<T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<T> {
     SharedMut { inner_impl }
+}
+
+// Use for transmutation from GlobalSharedMut to SharedMut.
+impl<T: ?Sized> From<SharedImpl<T>> for SharedMut<T> {
+    fn from(inner_impl: SharedImpl<T>) -> Self {
+        Self { inner_impl }
+    }
 }
 
 // UNSAFETY: Safe to clone an object that is considered safe.
@@ -172,40 +172,41 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 impl<T: Send + Sync + 'static> SharedMut<T> {
     /// Create a new [`SharedMut`], backed by a `RwLock` and poisoning on panic.
     pub fn new(t: T) -> SharedMut<T> {
-        Self::new_with_type(t, Implementation::RwLock)
+        Self::new_with_type(t, ImplementationMut::RwLock)
     }
 
     /// Create a new [`SharedMut`], backed by a `Mutex` and poisoning on panic.
     pub fn new_mutex(t: T) -> SharedMut<T> {
-        Self::new_with_type(t, Implementation::Mutex)
+        Self::new_with_type(t, ImplementationMut::Mutex)
     }
 
-    fn new_with_type(t: T, implementation: Implementation) -> Self {
+    fn new_with_type(t: T, implementation: ImplementationMut) -> Self {
         Self::new_with_type_and_policy(t, implementation, PoisonPolicy::Panic)
     }
 
     /// Create a new [`SharedMut`], backed by a `RwLock` and optionally poisoning on panic.
     pub fn new_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        Self::new_with_type_and_policy(t, Implementation::RwLock, policy)
+        Self::new_with_type_and_policy(t, ImplementationMut::RwLock, policy)
     }
 
     /// Create a new [`SharedMut`], backed by a `Mutex` and optionally poisoning on panic.
     pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
-        Self::new_with_type_and_policy(t, Implementation::Mutex, policy)
+        Self::new_with_type_and_policy(t, ImplementationMut::Mutex, policy)
     }
 
     fn new_with_type_and_policy(
         t: T,
-        implementation: Implementation,
+        implementation: ImplementationMut,
         policy: PoisonPolicy,
     ) -> Self {
         make_shared_rw_value::<T, T>(match implementation {
-            Implementation::Mutex => {
+            ImplementationMut::Mutex => {
                 SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t))))
             }
-            Implementation::RwLock => {
+            ImplementationMut::RwLock => {
                 SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
             }
+            ImplementationMut::RCU => unimplemented!("Use SharedMut::new_rcu instead"),
         })
     }
 }
@@ -217,11 +218,26 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
     ///
     /// Neither readers nor writers hold long-term locks on the underlying data, making the contention on this structure much lower than other styles.
     pub fn new_rcu(t: T) -> SharedMut<T> {
-        let cloner = |x: &Arc<T>| Box::new((**x).clone());
-        make_shared_rw_value::<T, T>(SharedImpl::ReadCopyUpdate(
-            Arc::new(cloner),
-            Arc::new(RwLock::new(Arc::new(t))),
-        ))
+        Self::new_cloneable_with_type_and_policy(t, ImplementationMut::RCU, PoisonPolicy::Ignore)
+    }
+
+    fn new_cloneable_with_type_and_policy(
+        t: T,
+        implementation: ImplementationMut,
+        policy: PoisonPolicy,
+    ) -> Self {
+        make_shared_rw_value::<T, T>(match implementation {
+            ImplementationMut::Mutex => {
+                SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t))))
+            }
+            ImplementationMut::RwLock => {
+                SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
+            }
+            ImplementationMut::RCU => {
+                let cloner = |x: &Arc<T>| Box::new((**x).clone());
+                SharedImpl::ReadCopyUpdate(Arc::new(cloner), Arc::new(RwLock::new(Arc::new(t))))
+            }
+        })
     }
 }
 
@@ -285,7 +301,7 @@ impl<T: ?Sized> SharedMut<T> {
 
 #[cfg(test)]
 mod test {
-    use super::{Implementation, SharedMut};
+    use super::*;
     use crate::{project, project_cast, PoisonPolicy};
     use paste::paste;
 
@@ -298,7 +314,7 @@ mod test {
 
     #[test]
     pub fn test_shared_rw_mutex() {
-        let shared = SharedMut::new_with_type(1, Implementation::Mutex);
+        let shared = SharedMut::new_mutex(1);
         *shared.write() += 1;
         assert_eq!(shared.read(), 2);
     }
@@ -403,9 +419,9 @@ mod test {
             }
         };
         (= $dir:ident, $imp:ident , $policy:ident) => {
-            let shared = SharedMut::new_with_type_and_policy(
+            let shared = SharedMut::new_cloneable_with_type_and_policy(
                 1_usize,
-                Implementation::$imp,
+                ImplementationMut::$imp,
                 PoisonPolicy::$policy,
             );
             let res = std::panic::catch_unwind(|| {
@@ -419,6 +435,7 @@ mod test {
 
     test_poison_policy!(test_poison_policy_mutex_ignore, Mutex, Ignore);
     test_poison_policy!(test_poison_policy_rwlock_ignore, RwLock, Ignore);
+    test_poison_policy!(test_poison_policy_rcu_ignore, RCU, Ignore);
     test_poison_policy!(test_poison_policy_mutex_panic, Mutex, Panic);
     test_poison_policy!(test_poison_policy_rwlock_panic, RwLock, Panic);
 

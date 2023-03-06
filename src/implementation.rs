@@ -5,6 +5,14 @@ use std::{
     sync::{atomic::AtomicBool, Arc},
 };
 
+/// Specifies the underlying mutable synchronization primitive.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(crate) enum ImplementationMut {
+    RwLock,
+    Mutex,
+    RCU,
+}
+
 /// Determines what should happen if the underlying synchronization primitive is poisoned by being held during
 /// a `panic!`.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -196,6 +204,40 @@ impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
         }
     }
 }
+
+impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
+    fn lock_read(&self) -> SharedReadLock<T> {
+        match self {
+            SharedGlobalImpl::Raw(x) => SharedReadLock {
+                inner: SharedReadLockInner::ArcRef(x),
+                poison: None,
+            },
+            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
+                inner: SharedReadLockInner::RwLock(policy.check(&poison, lock.read())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
+                inner: SharedReadLockInner::Mutex(policy.check(&poison, lock.lock())),
+                poison: policy.get_poison(&poison),
+            },
+        }
+    }
+
+    fn lock_write(&self) -> SharedWriteLock<T> {
+        match self {
+            SharedGlobalImpl::Raw(_) => unreachable!("Raw objects are never writable"),
+            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::RwLock(policy.check(&poison, lock.write())),
+                poison: policy.get_poison(&poison),
+            },
+            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {
+                inner: SharedWriteLockInner::Mutex(policy.check(&poison, lock.lock())),
+                poison: policy.get_poison(&poison),
+            },
+        }
+    }
+}
+
 pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
     fn lock_write(&self) -> SharedWriteLock<T>;
