@@ -37,6 +37,11 @@ The following container types are available:
 | [`Shared::new`]                | `Arc`                    | This is the default shared-immutable type. Note that this is slightly more verbose: [`Shared`] does not [`std::ops::Deref`] to the underlying type and requires calling [`Shared::read`].
 | [`Shared::new_mutex`]          | `Arc<Mutex<T>>`          | For types that are not `Sync`, a `Mutex` is used to serialize read-only access.
 | [`SharedMut::shared`]          | n/a                      | This provides a read-only view into a read-write container and has no direct equivalent.
+
+The following global container types are available:
+
+| Container                      | Equivalent               | Notes |
+|--------------------------------|--------------------------|-------|
 | [`SharedGlobal::new`]          | `static T`               | This is a global `const`-style object, for types that are `Send` + `Sync`.
 | [`SharedGlobal::new_lazy`]     | `static Lazy<T>`         | This is a lazily-initialized global `const`-style object, for types that are `Send` + `Sync`.
 | [`SharedGlobal::new_mutex`]    | `static Mutex<T>`        | This is a global `const`-style object, for types that are `Send` but not necessarily `Sync`
