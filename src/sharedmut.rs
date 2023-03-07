@@ -136,6 +136,35 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
         }
     }
 
+    fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
+        let lock = self.0.try_read();
+        if let Some(lock) = lock {
+            struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+                lock: SharedReadLock<'a, T>,
+                projector: &'a ProjectorRW<T, P>,
+            }
+
+            impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
+                type Target = P;
+                fn deref(&self) -> &Self::Target {
+                    (self.projector).project(&*self.lock)
+                }
+            }
+
+            let lock = HiddenLock {
+                lock,
+                projector: &self.1,
+            };
+
+            Some(SharedReadLock {
+                inner: SharedReadLockInner::Projection(Box::new(lock)),
+                poison: None,
+            })
+        } else {
+            None
+        }
+    }
+
     fn lock_write(&self) -> SharedWriteLock<P> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedWriteLock<'a, T>,
@@ -163,6 +192,41 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
         SharedWriteLock {
             inner: SharedWriteLockInner::Projection(Box::new(lock)),
             poison: None,
+        }
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLock<P>> {
+        let lock = self.0.try_write();
+        if let Some(lock) = lock {
+            struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+                lock: SharedWriteLock<'a, T>,
+                projector: &'a ProjectorRW<T, P>,
+            }
+
+            impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
+                type Target = P;
+                fn deref(&self) -> &Self::Target {
+                    (self.projector).project(&*self.lock)
+                }
+            }
+
+            impl<'a, T: ?Sized, P: ?Sized> std::ops::DerefMut for HiddenLock<'a, T, P> {
+                fn deref_mut(&mut self) -> &mut Self::Target {
+                    (self.projector).project_mut(&mut *self.lock)
+                }
+            }
+
+            let lock = HiddenLock {
+                lock,
+                projector: &self.1,
+            };
+
+            Some(SharedWriteLock {
+                inner: SharedWriteLockInner::Projection(Box::new(lock)),
+                poison: None,
+            })
+        } else {
+            None
         }
     }
 }
@@ -290,12 +354,24 @@ impl<T: ?Sized> SharedMut<T> {
         Shared::from(self.inner_impl)
     }
 
+    /// Get a read lock for this [`SharedMut`].
     pub fn read(&self) -> SharedReadLock<T> {
         self.inner_impl.lock_read()
     }
 
+    /// Try to get a read lock for this [`SharedMut`], or return [`None`] if we couldn't.
+    pub fn try_read(&self) -> Option<SharedReadLock<T>> {
+        self.inner_impl.try_lock_read()
+    }
+
+    /// Get a write lock for this [`SharedMut`].
     pub fn write(&self) -> SharedWriteLock<T> {
         self.inner_impl.lock_write()
+    }
+
+    /// Try to get a write lock for this [`SharedMut`], or return [`None`] if we couldn't.
+    pub fn try_write(&self) -> Option<SharedWriteLock<T>> {
+        self.inner_impl.try_lock_write()
     }
 }
 
@@ -438,6 +514,37 @@ mod test {
     test_poison_policy!(test_poison_policy_rcu_ignore, Rcu, Ignore);
     test_poison_policy!(test_poison_policy_mutex_panic, Mutex, Panic);
     test_poison_policy!(test_poison_policy_rwlock_panic, RwLock, Panic);
+
+    #[test]
+    pub fn test_try_lock_mutex() {
+        let shared = SharedMut::new_mutex(1);
+        let read = shared.try_read().expect("Should get us a lock");
+        assert!(shared.try_read().is_none());
+        assert!(shared.try_write().is_none());
+        drop(read);
+    }
+
+    #[test]
+    pub fn test_try_lock_rwlock() {
+        let shared = SharedMut::new(1);
+        let read = shared.try_read().expect("Should get us a lock");
+        assert!(shared.try_read().is_some());
+        assert!(shared.try_write().is_none());
+        drop(read);
+        assert!(shared.try_write().is_some());
+    }
+
+    /// Test that RCU locks always succeed.
+    #[test]
+    pub fn test_try_lock_rcu() {
+        let shared = SharedMut::new_rcu(1);
+        let read = shared.try_read().expect("Should get us a lock");
+        let write = shared.try_write().expect("Should get us a lock");
+        assert!(shared.try_read().is_some());
+        assert!(shared.try_write().is_some());
+        drop(read);
+        drop(write);
+    }
 
     #[cfg(feature = "serde")]
     #[test]
