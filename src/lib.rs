@@ -1,5 +1,7 @@
 #![doc = include_str!("../README.md")]
 
+#[cfg(feature = "async_experimental")]
+mod asynchronous;
 #[cfg(feature = "global_experimental")]
 mod global;
 #[cfg(feature = "global_experimental")]
