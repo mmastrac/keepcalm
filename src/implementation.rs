@@ -147,6 +147,33 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    pub fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        match &self {
+            SharedImpl::Arc(x) => Some(SharedReadLock {
+                inner: SharedReadLockInner::ArcRef(x),
+                poison: None,
+            }),
+            SharedImpl::ReadCopyUpdate(_, lock) => Some(SharedReadLock {
+                inner: SharedReadLockInner::ReadCopyUpdate(lock.read().clone()),
+                poison: None,
+            }),
+            SharedImpl::RwLock(policy, lock) => lock.1.try_read().map(|guard| SharedReadLock {
+                inner: SharedReadLockInner::RwLock(policy.check(&lock.0, guard)),
+                poison: policy.get_poison(&lock.0),
+            }),
+            SharedImpl::RwLockBox(policy, lock) => lock.1.try_read().map(|guard| SharedReadLock {
+                inner: SharedReadLockInner::RwLockBox(policy.check(&lock.0, guard)),
+                poison: policy.get_poison(&lock.0),
+            }),
+            SharedImpl::Mutex(policy, lock) => lock.1.try_lock().map(|guard| SharedReadLock {
+                inner: SharedReadLockInner::Mutex(policy.check(&lock.0, guard)),
+                poison: policy.get_poison(&lock.0),
+            }),
+            SharedImpl::Projection(p) => p.try_lock_read(),
+            SharedImpl::ProjectionRO(p) => p.try_lock_read(),
+        }
+    }
+
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self {
             SharedImpl::Arc(_) => unreachable!("This should not be possible"),
@@ -170,6 +197,35 @@ impl<T: ?Sized> SharedImpl<T> {
                 poison: policy.get_poison(&lock.0),
             },
             SharedImpl::Projection(p) => p.lock_write(),
+            SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
+        }
+    }
+
+    pub fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+        match &self {
+            SharedImpl::Arc(_) => unreachable!("This should not be possible"),
+            SharedImpl::ReadCopyUpdate(cloner, lock) => Some(SharedWriteLock {
+                inner: SharedWriteLockInner::ReadCopyUpdate(
+                    lock.deref(),
+                    Some(cloner(&*lock.read())),
+                ),
+                poison: None,
+            }),
+            SharedImpl::RwLock(policy, lock) => lock.1.try_write().map(|guard| SharedWriteLock {
+                inner: SharedWriteLockInner::RwLock(policy.check(&lock.0, guard)),
+                poison: policy.get_poison(&lock.0),
+            }),
+            SharedImpl::RwLockBox(policy, lock) => {
+                lock.1.try_write().map(|guard| SharedWriteLock {
+                    inner: SharedWriteLockInner::RwLockBox(policy.check(&lock.0, guard)),
+                    poison: policy.get_poison(&lock.0),
+                })
+            }
+            SharedImpl::Mutex(policy, lock) => lock.1.try_lock().map(|guard| SharedWriteLock {
+                inner: SharedWriteLockInner::Mutex(policy.check(&lock.0, guard)),
+                poison: policy.get_poison(&lock.0),
+            }),
+            SharedImpl::Projection(p) => p.try_lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
     }
@@ -256,6 +312,10 @@ impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
     fn read(&self) -> SharedReadLock<T> {
         (*self).read()
     }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        unimplemented!()
+    }
 }
 
 impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
@@ -266,19 +326,34 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
     fn lock_write(&self) -> SharedWriteLock<T> {
         (*self).write()
     }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        unimplemented!()
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+        unimplemented!()
+    }
 }
 
 pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
     fn lock_read(&self) -> SharedReadLock<T>;
+    fn try_lock_read(&self) -> Option<SharedReadLock<T>>;
     fn lock_write(&self) -> SharedWriteLock<T>;
+    fn try_lock_write(&self) -> Option<SharedWriteLock<T>>;
 }
 
 pub trait SharedProjection<T: ?Sized>: Send + Sync {
     fn read(&self) -> SharedReadLock<T>;
+    fn try_lock_read(&self) -> Option<SharedReadLock<T>>;
 }
 
 impl<T: ?Sized> SharedProjection<T> for dyn SharedMutProjection<T> {
     fn read(&self) -> SharedReadLock<T> {
         self.lock_read()
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        SharedMutProjection::try_lock_read(self)
     }
 }

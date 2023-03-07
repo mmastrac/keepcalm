@@ -174,6 +174,35 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
             poison: None,
         }
     }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
+        let lock = self.0.try_read();
+        if let Some(lock) = lock {
+            struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+                lock: SharedReadLock<'a, T>,
+                projector: &'a Projector<T, P>,
+            }
+
+            impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P> {
+                type Target = P;
+                fn deref(&self) -> &Self::Target {
+                    (self.projector).project(&*self.lock)
+                }
+            }
+
+            let lock = HiddenLock {
+                lock,
+                projector: &self.1,
+            };
+
+            Some(SharedReadLock {
+                inner: SharedReadLockInner::Projection(Box::new(lock)),
+                poison: None,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl<T: ?Sized> Shared<T> {
@@ -201,8 +230,14 @@ impl<T: ?Sized> Shared<T> {
         }
     }
 
+    /// Get a read lock for this [`Shared`].
     pub fn read(&self) -> SharedReadLock<T> {
         self.inner.lock_read()
+    }
+
+    /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.
+    pub fn try_read(&self) -> Option<SharedReadLock<T>> {
+        self.inner.try_lock_read()
     }
 }
 
