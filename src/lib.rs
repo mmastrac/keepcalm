@@ -9,6 +9,7 @@ mod locks;
 mod projection;
 mod shared;
 mod sharedmut;
+mod synchronizer;
 
 #[cfg(feature = "global_experimental")]
 pub use global::SharedGlobal;
