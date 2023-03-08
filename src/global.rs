@@ -1,7 +1,6 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
-use parking_lot::Mutex;
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedProjection},
@@ -93,7 +92,7 @@ impl<T: Send> SharedGlobal<T> {
     pub const fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
             inner: SharedGlobalImpl::Value(SynchronizerSized::new(
-                LockMetadata::poison_panic(),
+                LockMetadata::poison_policy(policy),
                 SynchronizerType::Mutex,
                 t,
             )),

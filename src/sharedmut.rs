@@ -513,6 +513,7 @@ mod test {
     test_poison_policy!(test_poison_policy_rcu_ignore, Rcu, Ignore);
     test_poison_policy!(test_poison_policy_mutex_panic, Mutex, Panic);
     test_poison_policy!(test_poison_policy_rwlock_panic, RwLock, Panic);
+    test_poison_policy!(test_poison_policy_rcu_panic, Rcu, Panic);
 
     #[test]
     pub fn test_try_lock_mutex() {

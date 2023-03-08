@@ -6,10 +6,7 @@ use crate::{
         SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
     },
 };
-use std::{
-    fmt::Debug,
-    sync::{atomic::AtomicBool, Arc},
-};
+use std::{fmt::Debug, sync::Arc};
 
 /// Specifies the underlying mutable synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -27,23 +24,6 @@ pub enum PoisonPolicy {
     Ignore,
     /// Panic if the value is poisoned.
     Panic,
-}
-
-impl PoisonPolicy {
-    fn check<T>(&self, poison: &AtomicBool, res: T) -> T {
-        if *self == PoisonPolicy::Panic && poison.load(std::sync::atomic::Ordering::Acquire) {
-            panic!("This lock was poisoned by a panic elsewhere in the code.");
-        }
-        res
-    }
-
-    fn get_poison<'a>(&self, poison: &'a AtomicBool) -> Option<&'a AtomicBool> {
-        if *self == PoisonPolicy::Panic {
-            Some(poison)
-        } else {
-            None
-        }
-    }
 }
 
 type Poison = std::sync::atomic::AtomicBool;
