@@ -72,13 +72,13 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, T> {
 /// Raw implementations.
 pub enum Synchronizer<T: ?Sized> {
     /// Only usable by non-mutable shares.
-    Arc(Arc<SynchronizerArc<T>>),
+    Arc(Arc<SynchronizerImpl<T>>),
     /// RCU-mode, which requires us to bring a cloning function along for the ride.
-    ReadCopyUpdate(Arc<SynchronizerRCU<T>>),
+    ReadCopyUpdate(Arc<SynchronizerImpl<RcuLock<T>>>),
     /// R/W lock.
-    RwLock(Arc<SynchronizerRwLock<T>>),
+    RwLock(Arc<SynchronizerImpl<RwLock<T>>>),
     /// Mutex.
-    Mutex(Arc<SynchronizerMutex<T>>),
+    Mutex(Arc<SynchronizerImpl<Mutex<T>>>),
 }
 
 impl<T: ?Sized> Clone for Synchronizer<T> {
@@ -104,16 +104,12 @@ where
 impl<T> Synchronizer<T> {
     pub fn new(policy: PoisonPolicy, sync_type: SynchronizerType, value: T) -> Synchronizer<T> {
         match sync_type {
-            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerArc { value })),
+            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerImpl { container: value })),
             SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
-            SynchronizerType::Mutex => Synchronizer::Mutex(Arc::new(SynchronizerMutex {
-                policy,
-                poison: Poison::new(false),
+            SynchronizerType::Mutex => Synchronizer::Mutex(Arc::new(SynchronizerImpl {
                 container: Mutex::new(value),
             })),
-            SynchronizerType::RwLock => Synchronizer::RwLock(Arc::new(SynchronizerRwLock {
-                policy,
-                poison: Poison::new(false),
+            SynchronizerType::RwLock => Synchronizer::RwLock(Arc::new(SynchronizerImpl {
                 container: RwLock::new(value),
             })),
         }
@@ -128,7 +124,7 @@ impl<T> Synchronizer<T> {
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerRCU {
+            SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerImpl {
                 container: RcuLock::new(value),
             })),
             _ => Self::new(policy, sync_type, value),
@@ -168,9 +164,6 @@ impl<T: ?Sized> Synchronizer<T> {
 }
 
 pub trait SynchronizerOps<T: ?Sized> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug;
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -194,34 +187,17 @@ pub trait SynchronizerOps<T: ?Sized> {
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>>;
 }
 
-pub struct SynchronizerArc<T: ?Sized> {
-    value: T,
+pub struct SynchronizerImpl<C: ?Sized> {
+    container: C,
 }
 
-pub struct SynchronizerRCU<T: ?Sized> {
-    container: RcuLock<T>,
-}
-
-pub struct SynchronizerRwLock<T: ?Sized> {
-    policy: PoisonPolicy,
-    poison: Poison,
-    container: RwLock<T>,
-}
-
-pub struct SynchronizerMutex<T: ?Sized> {
-    policy: PoisonPolicy,
-    poison: Poison,
-    container: Mutex<T>,
-}
-
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRwLock<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug,
-    {
-        Debug::fmt(&self.container, f)
+impl <C: ?Sized> Debug for SynchronizerImpl<C> where C: Debug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.container.fmt(f)
     }
+}
 
+impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<RwLock<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -249,14 +225,7 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRwLock<T> {
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerMutex<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug,
-    {
-        Debug::fmt(&self.container, f)
-    }
-
+impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<Mutex<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -282,14 +251,7 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerMutex<T> {
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug,
-    {
-        Debug::fmt(&self.container, f)
-    }
-
+impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<RcuLock<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -297,7 +259,7 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
     {
         self.container
             .try_unwrap()
-            .map_err(|container| SynchronizerRCU { container })
+            .map_err(|container| SynchronizerImpl { container })
     }
 
     fn lock_read(&self) -> SynchronizerReadLock<T> {
@@ -317,24 +279,17 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerArc<T> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug,
-    {
-        Debug::fmt(&self.value, f)
-    }
-
+impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<T> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
         T: Sized,
     {
-        Ok(self.value)
+        Ok(self.container)
     }
 
     fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::Arc(&self.value)
+        SynchronizerReadLock::Arc(&self.container)
     }
 
     fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
