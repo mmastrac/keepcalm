@@ -1,7 +1,6 @@
-use std::sync::{atomic::AtomicBool, Arc};
+use std::sync::Arc;
 
 use once_cell::sync::OnceCell;
-use parking_lot::{Mutex, RwLock};
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedMutProjection},
