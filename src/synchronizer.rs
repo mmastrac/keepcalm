@@ -1,8 +1,9 @@
-use std::{fmt::Debug, sync::Arc};
-
+use crate::{
+    rcu::{RcuLock, RcuReadGuard, RcuWriteGuard},
+    PoisonPolicy,
+};
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
-
-use crate::PoisonPolicy;
+use std::{fmt::Debug, sync::Arc};
 
 type Poison = std::sync::atomic::AtomicBool;
 
@@ -34,14 +35,14 @@ pub enum SynchronizerReadLock<'a, T: ?Sized> {
     /// A read "lock" that's just a plain reference.
     Arc(&'a T),
     /// A read "lock" that's an arc, used for RCU mode.
-    ReadCopyUpdate(Arc<T>),
+    ReadCopyUpdate(RcuReadGuard<T>),
     /// RwLock's read lock.
     RwLock(RwLockReadGuard<'a, T>),
     /// Mutex's read lock.
     Mutex(MutexGuard<'a, T>),
 }
 
-impl <'a, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, T> {
+impl<'a, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         with_ops!(self, deref())
@@ -55,43 +56,17 @@ pub enum SynchronizerWriteLock<'a, T: ?Sized> {
     Mutex(MutexGuard<'a, T>),
 }
 
-impl <'a, T: ?Sized> std::ops::Deref for SynchronizerWriteLock<'a, T> {
+impl<'a, T: ?Sized> std::ops::Deref for SynchronizerWriteLock<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         with_ops!(self, deref())
     }
 }
 
-impl <'a, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, T> {
+impl<'a, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         with_ops!(self, deref_mut())
     }
-}
-
-pub struct RcuWriteGuard<'a, T: ?Sized> {
-    lock: &'a RwLock<Arc<T>>,
-    writer: Option<Box<T>>,
-}
-
-impl <'a, T: ?Sized> std::ops::Deref for RcuWriteGuard<'a, T> {
-    type Target = T;
-    fn deref(&self) -> &Self::Target {
-        self.writer.as_deref().expect("Cannot deref after drop")
-    }
-}
-
-impl <'a, T: ?Sized> std::ops::DerefMut for RcuWriteGuard<'a, T> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        self.writer.as_deref_mut().expect("Cannot deref after drop")
-    }
-}
-
-impl<'a, T: ?Sized> Drop for RcuWriteGuard<'a, T> {
-    fn drop(&mut self) {
-        if let Some(value) = self.writer.take() {
-            *self.lock.write() = value.into();
-        }
-    }    
 }
 
 /// Raw implementations.
@@ -154,8 +129,7 @@ impl<T> Synchronizer<T> {
     {
         match sync_type {
             SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerRCU {
-                cloner: |x| Box::new((**x).clone()),
-                lock: RwLock::new(Arc::new(value)),
+                container: RcuLock::new(value),
             })),
             _ => Self::new(policy, sync_type, value),
         }
@@ -225,8 +199,7 @@ pub struct SynchronizerArc<T: ?Sized> {
 }
 
 pub struct SynchronizerRCU<T: ?Sized> {
-    cloner: fn(&Arc<T>) -> Box<T>,
-    lock: RwLock<Arc<T>>,
+    container: RcuLock<T>,
 }
 
 pub struct SynchronizerRwLock<T: ?Sized> {
@@ -314,7 +287,7 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
     where
         T: Debug,
     {
-        Debug::fmt(&self.lock, f)
+        Debug::fmt(&self.container, f)
     }
 
     fn try_unwrap(self) -> Result<T, Self>
@@ -322,18 +295,13 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
         Self: Sized,
         T: Sized,
     {
-        let lock = self.lock.into_inner();
-        match Arc::try_unwrap(lock) {
-            Ok(x) => Ok(x),
-            Err(lock) => Err(SynchronizerRCU {
-                cloner: self.cloner,
-                lock: RwLock::new(lock),
-            }),
-        }
+        self.container
+            .try_unwrap()
+            .map_err(|container| SynchronizerRCU { container })
     }
 
     fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::ReadCopyUpdate(self.lock.read().clone())
+        SynchronizerReadLock::ReadCopyUpdate(self.container.read())
     }
 
     fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
@@ -341,10 +309,7 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerRCU<T> {
     }
 
     fn lock_write(&self) -> SynchronizerWriteLock<T> {
-        SynchronizerWriteLock::ReadCopyUpdate(RcuWriteGuard {
-            lock: &self.lock,
-            writer: Some((self.cloner)(&*self.lock.read()))
-        })
+        SynchronizerWriteLock::ReadCopyUpdate(self.container.write())
     }
 
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {

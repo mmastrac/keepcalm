@@ -9,6 +9,7 @@ mod globalmut;
 mod implementation;
 mod locks;
 mod projection;
+mod rcu;
 mod shared;
 mod sharedmut;
 mod synchronizer;
