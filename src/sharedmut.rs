@@ -1,8 +1,8 @@
 use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
-use crate::synchronizer::SynchronizerUnsized;
 use crate::synchronizer::SynchronizerType;
+use crate::synchronizer::SynchronizerUnsized;
 use crate::Shared;
 use std::sync::Arc;
 

@@ -1,6 +1,4 @@
-use std::{fmt::Debug, sync::atomic::AtomicBool};
-
-use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
+use std::fmt::Debug;
 
 use crate::{
     implementation::LockMetadata,
@@ -16,12 +14,6 @@ pub enum SharedReadLockInner<'a, T: ?Sized> {
     /// Delegate to Synchronizer.
     Sync(SynchronizerReadLock<'a, LockMetadata, T>),
     SyncBox(SynchronizerReadLock<'a, LockMetadata, Box<T>>),
-    /// A read "lock" that's just a plain reference.
-    ArcRef(&'a T),
-    /// RwLock's read lock.
-    RwLock(RwLockReadGuard<'a, T>),
-    /// Mutex's read lock.
-    Mutex(MutexGuard<'a, T>),
     /// A projected lock.
     Projection(Box<dyn std::ops::Deref<Target = T> + 'a>),
 }
@@ -79,8 +71,6 @@ pub enum SharedWriteLockInner<'a, T: ?Sized> {
     /// Delegate to Synchronizer.
     Sync(SynchronizerWriteLock<'a, LockMetadata, T>),
     SyncBox(SynchronizerWriteLock<'a, LockMetadata, Box<T>>),
-    RwLock(RwLockWriteGuard<'a, T>),
-    Mutex(MutexGuard<'a, T>),
     Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
 }
 
@@ -121,9 +111,6 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedReadLock<'a, T> {
         match &self.inner {
             Sync(x) => x,
             SyncBox(x) => x,
-            ArcRef(x) => x,
-            RwLock(x) => x,
-            Mutex(x) => x,
             Projection(x) => x,
         }
     }
@@ -136,8 +123,6 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedWriteLock<'a, T> {
         match &self.inner {
             Sync(x) => x,
             SyncBox(x) => x,
-            RwLock(x) => x,
-            Mutex(x) => x,
             Projection(x) => x,
         }
     }
@@ -149,8 +134,6 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
         match &mut self.inner {
             Sync(x) => &mut *x,
             SyncBox(x) => &mut *x,
-            RwLock(x) => &mut *x,
-            Mutex(x) => &mut *x,
             Projection(x) => &mut *x,
         }
     }

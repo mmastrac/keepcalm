@@ -19,6 +19,7 @@ macro_rules! with_ops {
 unsafe impl<'a, M: Send + Sync, T> Send for SynchronizerReadLock<'a, M, T> {}
 unsafe impl<'a, M: Send + Sync, T> Send for SynchronizerWriteLock<'a, M, T> {}
 
+#[derive(Clone, Copy)]
 pub enum SynchronizerType {
     Arc,
     RCU,
@@ -81,6 +82,67 @@ impl<'a, M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerWriteLock<'a, M, 
 }
 
 /// Raw implementations.
+pub enum SynchronizerSized<M, T> {
+    /// Only usable by non-mutable shares.
+    Arc(SynchronizerImpl<M, T>),
+    /// RCU-mode, which requires us to bring a cloning function along for the ride.
+    ReadCopyUpdate(SynchronizerImpl<M, RcuLock<T>>),
+    /// R/W lock.
+    RwLock(SynchronizerImpl<M, RwLock<T>>),
+    /// Mutex.
+    Mutex(SynchronizerImpl<M, Mutex<T>>),
+}
+
+impl<M, T> SynchronizerSized<M, T> {
+    pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        with_ops!(self: x => x.lock_read())
+    }
+    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+        with_ops!(self: x => x.try_lock_read())
+    }
+    pub fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+        with_ops!(self: x => x.lock_write())
+    }
+    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+        with_ops!(self: x => x.try_lock_write())
+    }
+}
+
+impl<M, T> SynchronizerSized<M, T> {
+    pub const fn new(metadata: M, sync_type: SynchronizerType, value: T) -> Self {
+        match sync_type {
+            SynchronizerType::Arc => Self::Arc(SynchronizerImpl {
+                metadata,
+                container: value,
+            }),
+            SynchronizerType::RCU => panic!("RCU must be called with new_cloneable"),
+            SynchronizerType::Mutex => Self::Mutex(SynchronizerImpl {
+                metadata,
+                container: Mutex::new(value),
+            }),
+            SynchronizerType::RwLock => Self::RwLock(SynchronizerImpl {
+                metadata,
+                container: RwLock::new(value),
+            }),
+        }
+    }
+
+    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> Self
+    where
+        T: Clone,
+    {
+        match sync_type {
+            SynchronizerType::RCU => Self::ReadCopyUpdate(SynchronizerImpl {
+                metadata,
+                container: RcuLock::new(value),
+            }),
+            _ => Self::new(metadata, sync_type, value),
+        }
+    }
+}
+
+/// Raw implementations. Note that because Rust doesn't support unsized enums, the [`std::sync::Arc`] lives inside
+/// of the enum.
 pub enum SynchronizerUnsized<M, T: ?Sized> {
     /// Only usable by non-mutable shares.
     Arc(Arc<SynchronizerImpl<M, T>>),
@@ -119,30 +181,30 @@ where
 }
 
 impl<M, T> SynchronizerUnsized<M, T> {
-    pub fn new(metadata: M, sync_type: SynchronizerType, value: T) -> SynchronizerUnsized<M, T> {
+    pub fn new(metadata: M, sync_type: SynchronizerType, value: T) -> Self {
         match sync_type {
-            SynchronizerType::Arc => SynchronizerUnsized::Arc(Arc::new(SynchronizerImpl {
+            SynchronizerType::Arc => Self::Arc(Arc::new(SynchronizerImpl {
                 metadata,
                 container: value,
             })),
             SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
-            SynchronizerType::Mutex => SynchronizerUnsized::Mutex(Arc::new(SynchronizerImpl {
+            SynchronizerType::Mutex => Self::Mutex(Arc::new(SynchronizerImpl {
                 metadata,
                 container: Mutex::new(value),
             })),
-            SynchronizerType::RwLock => SynchronizerUnsized::RwLock(Arc::new(SynchronizerImpl {
+            SynchronizerType::RwLock => Self::RwLock(Arc::new(SynchronizerImpl {
                 metadata,
                 container: RwLock::new(value),
             })),
         }
     }
 
-    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> SynchronizerUnsized<M, T>
+    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> Self
     where
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => SynchronizerUnsized::ReadCopyUpdate(Arc::new(SynchronizerImpl {
+            SynchronizerType::RCU => Self::ReadCopyUpdate(Arc::new(SynchronizerImpl {
                 metadata,
                 container: RcuLock::new(value),
             })),
