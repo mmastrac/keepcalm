@@ -1,7 +1,4 @@
-use std::{
-    fmt::Debug,
-    sync::{atomic::AtomicBool},
-};
+use std::{fmt::Debug, sync::atomic::AtomicBool};
 
 use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 
@@ -49,15 +46,21 @@ impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
     }
 }
 
-impl <'a, T: ?Sized> From<SynchronizerReadLock<'a, T>> for SharedReadLock<'a, T> {
+impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, T>> for SharedReadLock<'a, T> {
     fn from(value: SynchronizerReadLock<'a, T>) -> Self {
-        SharedReadLock { inner: SharedReadLockInner::Sync(value), poison: None }
+        SharedReadLock {
+            inner: SharedReadLockInner::Sync(value),
+            poison: None,
+        }
     }
 }
 
-impl <'a, T: ?Sized> From<SynchronizerReadLock<'a, Box<T>>> for SharedReadLock<'a, T> {
+impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, Box<T>>> for SharedReadLock<'a, T> {
     fn from(value: SynchronizerReadLock<'a, Box<T>>) -> Self {
-        SharedReadLock { inner: SharedReadLockInner::SyncBox(value), poison: None }
+        SharedReadLock {
+            inner: SharedReadLockInner::SyncBox(value),
+            poison: None,
+        }
     }
 }
 
@@ -83,15 +86,21 @@ pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) poison: Option<&'a AtomicBool>,
 }
 
-impl <'a, T: ?Sized> From<SynchronizerWriteLock<'a, T>> for SharedWriteLock<'a, T> {
+impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, T>> for SharedWriteLock<'a, T> {
     fn from(value: SynchronizerWriteLock<'a, T>) -> Self {
-        SharedWriteLock { inner: SharedWriteLockInner::Sync(value), poison: None }
+        SharedWriteLock {
+            inner: SharedWriteLockInner::Sync(value),
+            poison: None,
+        }
     }
 }
 
-impl <'a, T: ?Sized> From<SynchronizerWriteLock<'a, Box<T>>> for SharedWriteLock<'a, T> {
+impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, Box<T>>> for SharedWriteLock<'a, T> {
     fn from(value: SynchronizerWriteLock<'a, Box<T>>) -> Self {
-        SharedWriteLock { inner: SharedWriteLockInner::SyncBox(value), poison: None }
+        SharedWriteLock {
+            inner: SharedWriteLockInner::SyncBox(value),
+            poison: None,
+        }
     }
 }
 
