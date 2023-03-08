@@ -22,7 +22,7 @@ unsafe impl<'a, M: Send + Sync, T> Send for SynchronizerWriteLock<'a, M, T> {}
 #[derive(Clone, Copy)]
 pub enum SynchronizerType {
     Arc,
-    RCU,
+    Rcu,
     RwLock,
     Mutex,
 }
@@ -115,7 +115,7 @@ impl<M, T> SynchronizerSized<M, T> {
                 metadata,
                 container: value,
             }),
-            SynchronizerType::RCU => panic!("RCU must be called with new_cloneable"),
+            SynchronizerType::Rcu => panic!("RCU must be called with new_cloneable"),
             SynchronizerType::Mutex => Self::Mutex(SynchronizerImpl {
                 metadata,
                 container: Mutex::new(value),
@@ -132,7 +132,7 @@ impl<M, T> SynchronizerSized<M, T> {
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => Self::ReadCopyUpdate(SynchronizerImpl {
+            SynchronizerType::Rcu => Self::ReadCopyUpdate(SynchronizerImpl {
                 metadata,
                 container: RcuLock::new(value),
             }),
@@ -187,7 +187,7 @@ impl<M, T> SynchronizerUnsized<M, T> {
                 metadata,
                 container: value,
             })),
-            SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
+            SynchronizerType::Rcu => unimplemented!("RCU must be called with new_cloneable"),
             SynchronizerType::Mutex => Self::Mutex(Arc::new(SynchronizerImpl {
                 metadata,
                 container: Mutex::new(value),
@@ -204,7 +204,7 @@ impl<M, T> SynchronizerUnsized<M, T> {
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => Self::ReadCopyUpdate(Arc::new(SynchronizerImpl {
+            SynchronizerType::Rcu => Self::ReadCopyUpdate(Arc::new(SynchronizerImpl {
                 metadata,
                 container: RcuLock::new(value),
             })),

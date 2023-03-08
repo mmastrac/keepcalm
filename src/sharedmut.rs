@@ -292,7 +292,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
     ) -> Self {
         let synchronizer_type = match implementation {
             ImplementationMut::Mutex => SynchronizerType::Mutex,
-            ImplementationMut::Rcu => SynchronizerType::RCU,
+            ImplementationMut::Rcu => SynchronizerType::Rcu,
             ImplementationMut::RwLock => SynchronizerType::RwLock,
         };
 
