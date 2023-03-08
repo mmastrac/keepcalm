@@ -2,7 +2,6 @@ use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
 use crate::Shared;
-use parking_lot::{Mutex, RwLock};
 use std::sync::Arc;
 
 /// The [`SharedMut`] object hides the complexity of managing `Arc<Mutex<T>>` or `Arc<RwLock<T>>` behind a single interface:
@@ -88,10 +87,10 @@ impl<T: ?Sized> SharedMut<T> {
     where
         Box<T>: Send + Sync + 'static,
     {
-        make_shared_rw_value::<Box<T>, T>(SharedImpl::RwLockBox(
+        make_shared_rw_value::<Box<T>, T>(SharedImpl::RwLockBox(Arc::new(make_shared_rwlock_box(
             PoisonPolicy::Panic,
-            Arc::new((Default::default(), RwLock::new(value))),
-        ))
+            value,
+        ))))
     }
 }
 
@@ -264,11 +263,9 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
         policy: PoisonPolicy,
     ) -> Self {
         make_shared_rw_value::<T, T>(match implementation {
-            ImplementationMut::Mutex => {
-                SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t))))
-            }
+            ImplementationMut::Mutex => SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
             ImplementationMut::RwLock => {
-                SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
+                SharedImpl::RwLock(Arc::new(make_shared_rwlock(policy, t)))
             }
             ImplementationMut::Rcu => unimplemented!("Use SharedMut::new_rcu instead"),
         })
@@ -291,15 +288,13 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
         policy: PoisonPolicy,
     ) -> Self {
         make_shared_rw_value::<T, T>(match implementation {
-            ImplementationMut::Mutex => {
-                SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t))))
-            }
+            ImplementationMut::Mutex => SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
             ImplementationMut::RwLock => {
-                SharedImpl::RwLock(policy, Arc::new((Default::default(), RwLock::new(t))))
+                SharedImpl::RwLock(Arc::new(make_shared_rwlock(policy, t)))
             }
             ImplementationMut::Rcu => {
                 let cloner = |x: &Arc<T>| Box::new((**x).clone());
-                SharedImpl::ReadCopyUpdate(Arc::new(cloner), Arc::new(RwLock::new(Arc::new(t))))
+                SharedImpl::ReadCopyUpdate(Arc::new(make_shared_rcu(cloner, Arc::new(t))))
             }
         })
     }

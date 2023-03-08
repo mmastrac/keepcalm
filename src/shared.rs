@@ -1,8 +1,9 @@
-use crate::implementation::{SharedImpl, SharedProjection};
+use crate::implementation::{
+    make_shared_arc, make_shared_arc_box, make_shared_mutex, SharedImpl, SharedProjection,
+};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
 use crate::{PoisonPolicy, SharedMut};
-use parking_lot::Mutex;
 use std::sync::Arc;
 
 /// The default [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project. [`Shared`] objects may also be
@@ -58,7 +59,7 @@ where
 {
     fn from(value: Box<T>) -> Self {
         Self {
-            inner: SharedImpl::Arc(Arc::from(value)),
+            inner: SharedImpl::ArcBox(Arc::new(make_shared_arc_box(value))),
         }
     }
 }
@@ -85,7 +86,7 @@ impl<T: ?Sized> Shared<T> {
         Box<T>: Send + Sync,
     {
         Self {
-            inner: SharedImpl::Arc(Arc::from(t)),
+            inner: SharedImpl::ArcBox(Arc::new(make_shared_arc_box(t))),
         }
     }
 }
@@ -126,7 +127,7 @@ impl<T: Send> Shared<T> {
     /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
     pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedImpl::Mutex(policy, Arc::new((Default::default(), Mutex::new(t)))),
+            inner: SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
         }
     }
 }
@@ -135,7 +136,7 @@ impl<T: Send + Sync + 'static> Shared<T> {
     /// Create a new [`Shared`], backed by an `Arc` and poisoning on panic.
     pub fn new(t: T) -> Self {
         Self {
-            inner: SharedImpl::Arc(Arc::new(t)),
+            inner: SharedImpl::Arc(Arc::new(make_shared_arc(t))),
         }
     }
 }
