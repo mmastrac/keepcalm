@@ -1,9 +1,11 @@
+use once_cell::sync::OnceCell;
+
 use crate::{
     locks::*,
-    synchronizer::{SynchronizerUnsized, SynchronizerMetadata},
+    synchronizer::{
+        SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
+    },
 };
-use once_cell::sync::OnceCell;
-use parking_lot::{Mutex, RwLock};
 use std::{
     fmt::Debug,
     sync::{atomic::AtomicBool, Arc},
@@ -51,15 +53,15 @@ pub struct LockMetadata {
 }
 
 impl LockMetadata {
-    pub fn poison_panic() -> Self {
+    pub const fn poison_panic() -> Self {
         Self::poison_policy(PoisonPolicy::Panic)
     }
 
-    pub fn poison_ignore() -> Self {
+    pub const fn poison_ignore() -> Self {
         Self::poison_policy(PoisonPolicy::Ignore)
     }
 
-    pub fn poison_policy(policy: PoisonPolicy) -> Self {
+    pub const fn poison_policy(policy: PoisonPolicy) -> Self {
         match policy {
             PoisonPolicy::Ignore => Self { poison: None },
             PoisonPolicy::Panic => Self {
@@ -172,12 +174,14 @@ impl<T: ?Sized> SharedImpl<T> {
 }
 
 pub enum SharedGlobalImpl<T: Send> {
-    Raw(T),
-    RawLazy(OnceCell<T>, fn() -> T),
-    RwLock(PoisonPolicy, Poison, RwLock<T>),
-    RwLockLazy(PoisonPolicy, Poison, OnceCell<RwLock<T>>, fn() -> T),
-    Mutex(PoisonPolicy, Poison, Mutex<T>),
-    MutexLazy(PoisonPolicy, Poison, OnceCell<Mutex<T>>, fn() -> T),
+    Value(SynchronizerSized<LockMetadata, T>),
+    Box(SynchronizerSized<LockMetadata, Box<T>>),
+    Lazy(
+        OnceCell<SynchronizerSized<LockMetadata, T>>,
+        fn() -> T,
+        SynchronizerType,
+        PoisonPolicy,
+    ),
 }
 
 // UNSAFETY: We cannot construct a SharedGlobalImpl that isn't safe to send across thread boundards, so we force this be to Send + Sync
@@ -189,51 +193,27 @@ impl<T: Send> SharedGlobalImpl<T> {}
 impl<T: Send> SharedGlobalImpl<T> {
     pub(crate) fn read(&self) -> SharedReadLock<T> {
         match self {
-            SharedGlobalImpl::Raw(x) => SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(x),
-            },
-            SharedGlobalImpl::RawLazy(once, f) => SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(once.get_or_init(f)),
-            },
-            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(poison, lock.read())),
-            },
-            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(
-                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).read()),
-                ),
-            },
-            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
-            },
-            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(
-                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
-                ),
-            },
+            SharedGlobalImpl::Value(lock) => lock.lock_read().into(),
+            SharedGlobalImpl::Box(lock) => lock.lock_read().into(),
+            SharedGlobalImpl::Lazy(lock, init, sync_type, policy) => {
+                let lock = lock.get_or_init(|| {
+                    SynchronizerSized::new(LockMetadata::poison_policy(*policy), *sync_type, init())
+                });
+                lock.lock_read().into()
+            }
         }
     }
 
     pub(crate) fn write(&self) -> SharedWriteLock<T> {
         match self {
-            SharedGlobalImpl::Raw(_) => unreachable!("Raw objects are never writable"),
-            SharedGlobalImpl::RawLazy(..) => unreachable!("Raw objects are never writable"),
-            SharedGlobalImpl::RwLock(policy, poison, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(policy.check(poison, lock.write())),
-            },
-            SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(
-                    policy.check(poison, once.get_or_init(|| RwLock::new(f())).write()),
-                ),
-            },
-            SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(policy.check(poison, lock.lock())),
-            },
-            SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(
-                    policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
-                ),
-            },
+            SharedGlobalImpl::Value(lock) => lock.lock_write().into(),
+            SharedGlobalImpl::Box(lock) => lock.lock_write().into(),
+            SharedGlobalImpl::Lazy(lock, init, sync_type, policy) => {
+                let lock = lock.get_or_init(|| {
+                    SynchronizerSized::new(LockMetadata::poison_policy(*policy), *sync_type, init())
+                });
+                lock.lock_write().into()
+            }
         }
     }
 }

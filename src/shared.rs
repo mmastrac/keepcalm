@@ -1,7 +1,7 @@
 use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
-use crate::synchronizer::{SynchronizerUnsized, SynchronizerType};
+use crate::synchronizer::{SynchronizerType, SynchronizerUnsized};
 use crate::{PoisonPolicy, SharedMut};
 use std::sync::Arc;
 

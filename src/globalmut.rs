@@ -4,7 +4,8 @@ use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 
 use crate::{
-    implementation::{SharedGlobalImpl, SharedImpl, SharedMutProjection},
+    implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedMutProjection},
+    synchronizer::{SynchronizerSized, SynchronizerType},
     PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
 };
 
@@ -19,11 +20,11 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
     /// Create a new [`SharedGlobalMut`].
     pub const fn new(t: T) -> Self {
         Self {
-            inner: SharedGlobalImpl::RwLock(
-                PoisonPolicy::Panic,
-                AtomicBool::new(false),
-                RwLock::new(t),
-            ),
+            inner: SharedGlobalImpl::Value(SynchronizerSized::new(
+                LockMetadata::poison_policy(PoisonPolicy::Panic),
+                SynchronizerType::RwLock,
+                t,
+            )),
             projection: OnceCell::new(),
         }
     }
@@ -31,11 +32,11 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
     /// Create a new, lazy [`SharedGlobalMut`] implementation that will be initialized on the first access.
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::RwLockLazy(
-                PoisonPolicy::Panic,
-                AtomicBool::new(false),
+            inner: SharedGlobalImpl::Lazy(
                 OnceCell::new(),
                 f,
+                SynchronizerType::RwLock,
+                PoisonPolicy::Panic,
             ),
             projection: OnceCell::new(),
         }
@@ -74,11 +75,11 @@ impl<T: Send> SharedGlobalMut<T> {
     /// [`SharedGlobalMut::new_lazy`] to create a [`SharedGlobalMut`] implementation that uses a [`Mutex`].
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::MutexLazy(
-                PoisonPolicy::Panic,
-                AtomicBool::new(false),
+            inner: SharedGlobalImpl::Lazy(
                 OnceCell::new(),
                 f,
+                SynchronizerType::Mutex,
+                PoisonPolicy::Panic,
             ),
             projection: OnceCell::new(),
         }
@@ -92,7 +93,11 @@ impl<T: Send> SharedGlobalMut<T> {
     /// Create a new [`SharedGlobalMut`], backed by a `Mutex` and optionally poisoning on panic.
     pub const fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedGlobalImpl::Mutex(policy, AtomicBool::new(false), Mutex::new(t)),
+            inner: SharedGlobalImpl::Value(SynchronizerSized::new(
+                LockMetadata::poison_policy(policy),
+                SynchronizerType::Mutex,
+                t,
+            )),
             projection: OnceCell::new(),
         }
     }
