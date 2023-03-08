@@ -36,15 +36,15 @@ pub enum SynchronizerWriteLock<'a, T: ?Sized> {
 }
 
 /// Raw implementations.
-pub enum Synchronizer<T> {
+pub enum Synchronizer<T: ?Sized> {
     /// Only usable by non-mutable shares.
-    Arc(SynchronizerArc<T>),
+    Arc(Arc<SynchronizerArc<T>>),
     /// RCU-mode, which requires us to bring a cloning function along for the ride.
-    ReadCopyUpdate(SynchronizerRCU<T>),
+    ReadCopyUpdate(Arc<SynchronizerRCU<T>>),
     /// R/W lock.
-    RwLock(SynchronizerRwLock<T>),
+    RwLock(Arc<SynchronizerRwLock<T>>),
     /// Mutex.
-    Mutex(SynchronizerMutex<T>),
+    Mutex(Arc<SynchronizerMutex<T>>),
 }
 
 /// Virtual dispatch.
@@ -62,18 +62,18 @@ macro_rules! with_ops {
 impl<T> Synchronizer<T> {
     pub fn new(policy: PoisonPolicy, sync_type: SynchronizerType, value: T) -> Synchronizer<T> {
         match sync_type {
-            SynchronizerType::Arc => Synchronizer::Arc(SynchronizerArc { value }),
+            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerArc { value })),
             SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
-            SynchronizerType::Mutex => Synchronizer::Mutex(SynchronizerMutex {
+            SynchronizerType::Mutex => Synchronizer::Mutex(Arc::new(SynchronizerMutex {
                 policy,
                 poison: Poison::new(false),
                 container: Mutex::new(value),
-            }),
-            SynchronizerType::RwLock => Synchronizer::RwLock(SynchronizerRwLock {
+            })),
+            SynchronizerType::RwLock => Synchronizer::RwLock(Arc::new(SynchronizerRwLock {
                 policy,
                 poison: Poison::new(false),
                 container: RwLock::new(value),
-            }),
+            })),
         }
     }
     pub fn new_cloneable(
@@ -85,10 +85,10 @@ impl<T> Synchronizer<T> {
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(SynchronizerRCU {
+            SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerRCU {
                 cloner: |x| Box::new((**x).clone()),
                 lock: RwLock::new(Arc::new(value)),
-            }),
+            })),
             _ => Self::new(policy, sync_type, value),
         }
     }
@@ -123,22 +123,22 @@ pub trait SynchronizerOps<T> {
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>>;
 }
 
-pub struct SynchronizerArc<T> {
+pub struct SynchronizerArc<T: ?Sized> {
     value: T,
 }
 
-pub struct SynchronizerRCU<T> {
+pub struct SynchronizerRCU<T: ?Sized> {
     cloner: fn(&Arc<T>) -> Box<T>,
     lock: RwLock<Arc<T>>,
 }
 
-pub struct SynchronizerRwLock<T> {
+pub struct SynchronizerRwLock<T: ?Sized> {
     policy: PoisonPolicy,
     poison: Poison,
     container: RwLock<T>,
 }
 
-pub struct SynchronizerMutex<T> {
+pub struct SynchronizerMutex<T: ?Sized> {
     policy: PoisonPolicy,
     poison: Poison,
     container: Mutex<T>,
