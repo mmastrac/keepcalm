@@ -187,7 +187,6 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
 
         SharedReadLock {
             inner: SharedReadLockInner::Projection(Box::new(lock)),
-            poison: None,
         }
     }
 
@@ -213,7 +212,6 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
 
             Some(SharedReadLock {
                 inner: SharedReadLockInner::Projection(Box::new(lock)),
-                poison: None,
             })
         } else {
             None

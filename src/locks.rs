@@ -4,7 +4,7 @@ use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 
 use crate::{
     implementation::LockMetadata,
-    synchronizer::{SynchronizerReadLock, SynchronizerWriteLock},
+    synchronizer::{SynchronizerMetadata, SynchronizerReadLock, SynchronizerWriteLock},
 };
 
 /// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
@@ -36,14 +36,24 @@ pub enum SharedReadLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedReadLock<'a, T: ?Sized> {
     pub(crate) inner: SharedReadLockInner<'a, T>,
-    pub(crate) poison: Option<&'a AtomicBool>,
 }
 
 impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
     fn drop(&mut self) {
-        if let Some(poison) = self.poison {
-            if std::thread::panicking() {
-                poison.store(true, std::sync::atomic::Ordering::Release);
+        if let SharedReadLockInner::Sync(lock) = &self.inner {
+            let metadata = lock.metadata();
+            if let Some(poison) = &metadata.poison {
+                if std::thread::panicking() {
+                    poison.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        if let SharedReadLockInner::SyncBox(lock) = &self.inner {
+            let metadata = lock.metadata();
+            if let Some(poison) = &metadata.poison {
+                if std::thread::panicking() {
+                    poison.store(true, std::sync::atomic::Ordering::Release);
+                }
             }
         }
     }
@@ -53,7 +63,6 @@ impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, T>> for SharedRe
     fn from(value: SynchronizerReadLock<'a, LockMetadata, T>) -> Self {
         SharedReadLock {
             inner: SharedReadLockInner::Sync(value),
-            poison: None,
         }
     }
 }
@@ -62,7 +71,6 @@ impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, Box<T>>> for Sha
     fn from(value: SynchronizerReadLock<'a, LockMetadata, Box<T>>) -> Self {
         SharedReadLock {
             inner: SharedReadLockInner::SyncBox(value),
-            poison: None,
         }
     }
 }
@@ -86,14 +94,12 @@ pub enum SharedWriteLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) inner: SharedWriteLockInner<'a, T>,
-    pub(crate) poison: Option<&'a AtomicBool>,
 }
 
 impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, T>> for SharedWriteLock<'a, T> {
     fn from(value: SynchronizerWriteLock<'a, LockMetadata, T>) -> Self {
         SharedWriteLock {
             inner: SharedWriteLockInner::Sync(value),
-            poison: None,
         }
     }
 }
@@ -104,7 +110,6 @@ impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, Box<T>>>
     fn from(value: SynchronizerWriteLock<'a, LockMetadata, Box<T>>) -> Self {
         SharedWriteLock {
             inner: SharedWriteLockInner::SyncBox(value),
-            poison: None,
         }
     }
 }
@@ -153,9 +158,20 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
 
 impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
     fn drop(&mut self) {
-        if let Some(poison) = self.poison {
-            if std::thread::panicking() {
-                poison.store(true, std::sync::atomic::Ordering::Release);
+        if let SharedWriteLockInner::Sync(lock) = &self.inner {
+            let metadata = lock.metadata();
+            if let Some(poison) = &metadata.poison {
+                if std::thread::panicking() {
+                    poison.store(true, std::sync::atomic::Ordering::Release);
+                }
+            }
+        }
+        if let SharedWriteLockInner::SyncBox(lock) = &self.inner {
+            let metadata = lock.metadata();
+            if let Some(poison) = &metadata.poison {
+                if std::thread::panicking() {
+                    poison.store(true, std::sync::atomic::Ordering::Release);
+                }
             }
         }
     }

@@ -1,4 +1,7 @@
-use crate::{locks::*, synchronizer::Synchronizer};
+use crate::{
+    locks::*,
+    synchronizer::{Synchronizer, SynchronizerMetadata},
+};
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 use std::{
@@ -44,7 +47,7 @@ impl PoisonPolicy {
 type Poison = std::sync::atomic::AtomicBool;
 
 pub struct LockMetadata {
-    poison: Option<Poison>,
+    pub poison: Option<Poison>,
 }
 
 impl LockMetadata {
@@ -74,91 +77,6 @@ pub enum SharedImpl<T: ?Sized> {
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
-pub trait SharedImplOps<T: ?Sized>: SharedLockOps<T> {
-    fn try_unwrap(self) -> Result<T, Self>
-    where
-        Self: Sized,
-        T: Sized;
-
-    fn get_poison(&self) -> Option<(PoisonPolicy, &Poison)> {
-        None
-    }
-
-    fn lock_read_impl(&self) -> SharedReadLock<T> {
-        let inner = self.lock_read();
-        if let Some((policy, poison)) = self.get_poison() {
-            SharedReadLock {
-                inner: policy.check(poison, inner),
-                poison: Some(poison),
-            }
-        } else {
-            SharedReadLock {
-                inner,
-                poison: None,
-            }
-        }
-    }
-
-    fn try_lock_read_impl(&self) -> Option<SharedReadLock<T>> {
-        let inner = self.try_lock_read();
-        inner.map(|inner| {
-            if let Some((policy, poison)) = self.get_poison() {
-                SharedReadLock {
-                    inner: policy.check(poison, inner),
-                    poison: Some(poison),
-                }
-            } else {
-                SharedReadLock {
-                    inner,
-                    poison: None,
-                }
-            }
-        })
-    }
-
-    fn lock_write_impl(&self) -> SharedWriteLock<T> {
-        let inner = self.lock_write();
-        if let Some((policy, poison)) = self.get_poison() {
-            SharedWriteLock {
-                inner: policy.check(poison, inner),
-                poison: Some(poison),
-            }
-        } else {
-            SharedWriteLock {
-                inner,
-                poison: None,
-            }
-        }
-    }
-
-    fn try_lock_write_impl(&self) -> Option<SharedWriteLock<T>> {
-        let inner = self.try_lock_write();
-        inner.map(|inner| {
-            if let Some((policy, poison)) = self.get_poison() {
-                SharedWriteLock {
-                    inner: policy.check(poison, inner),
-                    poison: Some(poison),
-                }
-            } else {
-                SharedWriteLock {
-                    inner,
-                    poison: None,
-                }
-            }
-        })
-    }
-}
-
-pub trait SharedLockOps<T: ?Sized> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
-    where
-        T: Debug;
-    fn lock_read(&self) -> SharedReadLockInner<T>;
-    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>>;
-    fn lock_write(&self) -> SharedWriteLockInner<T>;
-    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>>;
-}
-
 impl<T: ?Sized + Debug> Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -185,6 +103,7 @@ impl<T: ?Sized> Clone for SharedImpl<T> {
 impl<T> SharedImpl<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
+        self.check_poison();
         match self {
             SharedImpl::Value(lock) => lock.try_unwrap().map_err(SharedImpl::Value),
             SharedImpl::Box(lock) => lock.try_unwrap().map_err(SharedImpl::Box).map(|x| *x),
@@ -195,7 +114,23 @@ impl<T> SharedImpl<T> {
 }
 
 impl<T: ?Sized> SharedImpl<T> {
+    fn check_poison(&self) {
+        let metadata = match &self {
+            SharedImpl::Value(lock) => Some(lock.metadata()),
+            SharedImpl::Box(lock) => Some(lock.metadata()),
+            _ => None,
+        };
+        if let Some(metadata) = metadata {
+            if let Some(poison) = &metadata.poison {
+                if poison.load(std::sync::atomic::Ordering::Acquire) {
+                    panic!("This lock was poisoned by a panic elsewhere in the code.");
+                }
+            }
+        }
+    }
+
     pub fn lock_read(&self) -> SharedReadLock<T> {
+        self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.lock_read().into(),
             SharedImpl::Box(lock) => lock.lock_read().into(),
@@ -205,6 +140,7 @@ impl<T: ?Sized> SharedImpl<T> {
     }
 
     pub fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.try_lock_read().map(|x| x.into()),
             SharedImpl::Box(lock) => lock.try_lock_read().map(|x| x.into()),
@@ -214,6 +150,7 @@ impl<T: ?Sized> SharedImpl<T> {
     }
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
+        self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.lock_write().into(),
             SharedImpl::Box(lock) => lock.lock_write().into(),
@@ -223,6 +160,7 @@ impl<T: ?Sized> SharedImpl<T> {
     }
 
     pub fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+        self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.try_lock_write().map(|x| x.into()),
             SharedImpl::Box(lock) => lock.try_lock_write().map(|x| x.into()),
@@ -252,31 +190,25 @@ impl<T: Send> SharedGlobalImpl<T> {
         match self {
             SharedGlobalImpl::Raw(x) => SharedReadLock {
                 inner: SharedReadLockInner::ArcRef(x),
-                poison: None,
             },
             SharedGlobalImpl::RawLazy(once, f) => SharedReadLock {
                 inner: SharedReadLockInner::ArcRef(once.get_or_init(f)),
-                poison: None,
             },
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(policy.check(poison, lock.read())),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedReadLock {
                 inner: SharedReadLockInner::RwLock(
                     policy.check(poison, once.get_or_init(|| RwLock::new(f())).read()),
                 ),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedReadLock {
                 inner: SharedReadLockInner::Mutex(policy.check(poison, lock.lock())),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedReadLock {
                 inner: SharedReadLockInner::Mutex(
                     policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
                 ),
-                poison: policy.get_poison(poison),
             },
         }
     }
@@ -287,23 +219,19 @@ impl<T: Send> SharedGlobalImpl<T> {
             SharedGlobalImpl::RawLazy(..) => unreachable!("Raw objects are never writable"),
             SharedGlobalImpl::RwLock(policy, poison, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(policy.check(poison, lock.write())),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::RwLockLazy(policy, poison, once, f) => SharedWriteLock {
                 inner: SharedWriteLockInner::RwLock(
                     policy.check(poison, once.get_or_init(|| RwLock::new(f())).write()),
                 ),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::Mutex(policy, poison, lock) => SharedWriteLock {
                 inner: SharedWriteLockInner::Mutex(policy.check(poison, lock.lock())),
-                poison: policy.get_poison(poison),
             },
             SharedGlobalImpl::MutexLazy(policy, poison, once, f) => SharedWriteLock {
                 inner: SharedWriteLockInner::Mutex(
                     policy.check(poison, once.get_or_init(|| Mutex::new(f())).lock()),
                 ),
-                poison: policy.get_poison(poison),
             },
         }
     }
