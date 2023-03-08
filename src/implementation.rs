@@ -2,7 +2,8 @@ use crate::locks::*;
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
 use std::{
-    ops::Deref,
+    fmt::Debug,
+    marker::PhantomData,
     sync::{atomic::AtomicBool, Arc},
 };
 
@@ -46,25 +47,400 @@ type Poison = std::sync::atomic::AtomicBool;
 #[allow(clippy::type_complexity)]
 pub enum SharedImpl<T: ?Sized> {
     /// Only usable by non-mutable shares.
-    Arc(Arc<T>),
+    Arc(Arc<SharedImplArc<T>>),
+    ArcBox(Arc<SharedImplArcBox<T>>),
     /// RCU-mode, which requires us to bring a cloning function along for the ride.
-    ReadCopyUpdate(Arc<dyn Fn(&Arc<T>) -> Box<T> + Send>, Arc<RwLock<Arc<T>>>),
-    RwLock(PoisonPolicy, Arc<(Poison, RwLock<T>)>),
+    ReadCopyUpdate(Arc<SharedImplRCU<T>>),
+    RwLock(Arc<SharedImplPoisonable<T, RwLock<T>>>),
     /// Used for unsized types
-    RwLockBox(PoisonPolicy, Arc<(Poison, RwLock<Box<T>>)>),
-    Mutex(PoisonPolicy, Arc<(Poison, Mutex<T>)>),
+    RwLockBox(Arc<SharedImplPoisonable<T, RwLock<Box<T>>>>),
+    Mutex(Arc<SharedImplPoisonable<T, Mutex<T>>>),
     Projection(Arc<dyn SharedMutProjection<T> + 'static>),
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
-impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedImpl<T> {
+pub trait SharedImplOps<T: ?Sized>: SharedLockOps<T> {
+    fn try_unwrap(self) -> Result<T, Self>
+    where
+        Self: Sized,
+        T: Sized;
+
+    fn get_poison(&self) -> Option<(PoisonPolicy, &Poison)> {
+        None
+    }
+
+    fn lock_read_impl(&self) -> SharedReadLock<T> {
+        let inner = self.lock_read();
+        if let Some((policy, poison)) = self.get_poison() {
+            SharedReadLock {
+                inner: policy.check(poison, inner),
+                poison: Some(poison),
+            }
+        } else {
+            SharedReadLock {
+                inner,
+                poison: None,
+            }
+        }
+    }
+
+    fn try_lock_read_impl(&self) -> Option<SharedReadLock<T>> {
+        let inner = self.try_lock_read();
+        inner.map(|inner| {
+            if let Some((policy, poison)) = self.get_poison() {
+                SharedReadLock {
+                    inner: policy.check(poison, inner),
+                    poison: Some(poison),
+                }
+            } else {
+                SharedReadLock {
+                    inner,
+                    poison: None,
+                }
+            }
+        })
+    }
+
+    fn lock_write_impl(&self) -> SharedWriteLock<T> {
+        let inner = self.lock_write();
+        if let Some((policy, poison)) = self.get_poison() {
+            SharedWriteLock {
+                inner: policy.check(poison, inner),
+                poison: Some(poison),
+            }
+        } else {
+            SharedWriteLock {
+                inner,
+                poison: None,
+            }
+        }
+    }
+
+    fn try_lock_write_impl(&self) -> Option<SharedWriteLock<T>> {
+        let inner = self.try_lock_write();
+        inner.map(|inner| {
+            if let Some((policy, poison)) = self.get_poison() {
+                SharedWriteLock {
+                    inner: policy.check(poison, inner),
+                    poison: Some(poison),
+                }
+            } else {
+                SharedWriteLock {
+                    inner,
+                    poison: None,
+                }
+            }
+        })
+    }
+}
+
+pub trait SharedLockOps<T: ?Sized> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug;
+    fn lock_read(&self) -> SharedReadLockInner<T>;
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>>;
+    fn lock_write(&self) -> SharedWriteLockInner<T>;
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>>;
+}
+
+pub const fn make_shared_rcu<T>(cloner: fn(&Arc<T>) -> Box<T>, t: Arc<T>) -> SharedImplRCU<T> {
+    SharedImplRCU {
+        cloner,
+        lock: RwLock::new(t),
+    }
+}
+
+pub const fn make_shared_arc<T>(value: T) -> SharedImplArc<T> {
+    SharedImplArc { value }
+}
+
+pub const fn make_shared_arc_box<T: ?Sized>(value: Box<T>) -> SharedImplArcBox<T> {
+    SharedImplArcBox { value }
+}
+
+pub const fn make_shared_mutex<T>(policy: PoisonPolicy, t: T) -> SharedImplPoisonable<T, Mutex<T>> {
+    SharedImplPoisonable {
+        policy,
+        poison: AtomicBool::new(false),
+        container: Mutex::new(t),
+        _unused: PhantomData {},
+    }
+}
+
+pub const fn make_shared_rwlock<T>(
+    policy: PoisonPolicy,
+    t: T,
+) -> SharedImplPoisonable<T, RwLock<T>> {
+    SharedImplPoisonable {
+        policy,
+        poison: AtomicBool::new(false),
+        container: RwLock::new(t),
+        _unused: PhantomData {},
+    }
+}
+
+pub const fn make_shared_rwlock_box<T: ?Sized>(
+    policy: PoisonPolicy,
+    t: Box<T>,
+) -> SharedImplPoisonable<T, RwLock<Box<T>>> {
+    SharedImplPoisonable {
+        policy,
+        poison: AtomicBool::new(false),
+        container: RwLock::new(t),
+        _unused: PhantomData {},
+    }
+}
+
+pub struct SharedImplArc<T: ?Sized> {
+    value: T,
+}
+
+pub struct SharedImplArcBox<T: ?Sized> {
+    value: Box<T>,
+}
+
+pub struct SharedImplRCU<T: ?Sized> {
+    cloner: fn(&Arc<T>) -> Box<T>,
+    lock: RwLock<Arc<T>>,
+}
+
+pub struct SharedImplPoisonable<T: ?Sized, C: ?Sized + SharedLockOps<T>> {
+    policy: PoisonPolicy,
+    poison: Poison,
+    _unused: PhantomData<T>,
+    container: C,
+}
+
+impl<T: ?Sized, C: ?Sized + SharedLockOps<T>> SharedLockOps<T> for SharedImplPoisonable<T, C> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        f.write_fmt(format_args!("{:?} {:?}", self.policy, self.poison))?;
+        self.container.fmt(f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        self.container.lock_read()
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        self.container.try_lock_read()
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        self.container.lock_write()
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        self.container.try_lock_write()
+    }
+}
+
+impl<T: ?Sized, C: ?Sized + SharedLockOps<T>> SharedImplOps<T> for SharedImplPoisonable<T, C> {
+    fn get_poison(&self) -> Option<(PoisonPolicy, &Poison)> {
+        Some((self.policy, &self.poison))
+    }
+
+    fn try_unwrap(self) -> Result<T, Self>
+    where
+        Self: Sized,
+        T: Sized,
+    {
+        unimplemented!()
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for RwLock<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(self, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::RwLock(self.read())
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        self.try_read().map(SharedReadLockInner::RwLock)
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        SharedWriteLockInner::RwLock(self.write())
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        self.try_write().map(SharedWriteLockInner::RwLock)
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for RwLock<Box<T>> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(self, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::RwLockBox(self.read())
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        self.try_read().map(SharedReadLockInner::RwLockBox)
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        SharedWriteLockInner::RwLockBox(self.write())
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        self.try_write().map(SharedWriteLockInner::RwLockBox)
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for Mutex<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(self, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::Mutex(self.lock())
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        self.try_lock().map(SharedReadLockInner::Mutex)
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        SharedWriteLockInner::Mutex(self.lock())
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        self.try_lock().map(SharedWriteLockInner::Mutex)
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for SharedImplRCU<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(&self.lock, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::ReadCopyUpdate(self.lock.read().clone())
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        Some(self.lock_read())
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        SharedWriteLockInner::ReadCopyUpdate(&self.lock, Some((self.cloner)(&*self.lock.read())))
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        Some(self.lock_write())
+    }
+}
+
+impl<T: ?Sized> SharedImplOps<T> for SharedImplRCU<T> {
+    fn try_unwrap(self) -> Result<T, Self>
+    where
+        Self: Sized,
+        T: Sized,
+    {
+        unimplemented!()
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for SharedImplArc<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(&self.value, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::ArcRef(&self.value)
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        Some(self.lock_read())
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        unreachable!()
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        unreachable!()
+    }
+}
+
+impl<T: ?Sized> SharedImplOps<T> for SharedImplArc<T> {
+    fn try_unwrap(self) -> Result<T, Self>
+    where
+        Self: Sized,
+        T: Sized,
+    {
+        unimplemented!()
+    }
+}
+
+impl<T: ?Sized> SharedLockOps<T> for SharedImplArcBox<T> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result
+    where
+        T: Debug,
+    {
+        Debug::fmt(&self.value, f)
+    }
+
+    fn lock_read(&self) -> SharedReadLockInner<T> {
+        SharedReadLockInner::ArcRef(&self.value)
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLockInner<T>> {
+        Some(self.lock_read())
+    }
+
+    fn lock_write(&self) -> SharedWriteLockInner<T> {
+        unreachable!()
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLockInner<T>> {
+        unreachable!()
+    }
+}
+
+impl<T: ?Sized> SharedImplOps<T> for SharedImplArcBox<T> {
+    fn try_unwrap(self) -> Result<T, Self>
+    where
+        Self: Sized,
+        T: Sized,
+    {
+        unimplemented!()
+    }
+}
+
+impl<T: ?Sized + Debug> Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            SharedImpl::Arc(x) => x.fmt(f),
-            SharedImpl::ReadCopyUpdate(_, x) => x.fmt(f),
-            SharedImpl::Mutex(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
-            SharedImpl::RwLock(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
-            SharedImpl::RwLockBox(policy, x) => f.write_fmt(format_args!("{:?} {:?}", policy, x)),
+            SharedImpl::Arc(lock) => lock.fmt(f),
+            SharedImpl::ArcBox(lock) => lock.fmt(f),
+            SharedImpl::ReadCopyUpdate(lock) => lock.fmt(f),
+            SharedImpl::Mutex(lock) => lock.fmt(f),
+            SharedImpl::RwLock(lock) => lock.fmt(f),
+            SharedImpl::RwLockBox(lock) => lock.fmt(f),
             // TODO: We should format the underlying projection
             SharedImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
             SharedImpl::ProjectionRO(_x) => f.write_fmt(format_args!("(projection)")),
@@ -75,11 +451,12 @@ impl<T: ?Sized + std::fmt::Debug> std::fmt::Debug for SharedImpl<T> {
 impl<T: ?Sized> Clone for SharedImpl<T> {
     fn clone(&self) -> Self {
         match &self {
-            SharedImpl::Arc(x) => SharedImpl::Arc(x.clone()),
-            SharedImpl::ReadCopyUpdate(x, y) => SharedImpl::ReadCopyUpdate(x.clone(), y.clone()),
-            SharedImpl::RwLock(policy, x) => SharedImpl::RwLock(*policy, x.clone()),
-            SharedImpl::RwLockBox(policy, x) => SharedImpl::RwLockBox(*policy, x.clone()),
-            SharedImpl::Mutex(policy, x) => SharedImpl::Mutex(*policy, x.clone()),
+            SharedImpl::Arc(lock) => SharedImpl::Arc(lock.clone()),
+            SharedImpl::ArcBox(lock) => SharedImpl::ArcBox(lock.clone()),
+            SharedImpl::ReadCopyUpdate(lock) => SharedImpl::ReadCopyUpdate(lock.clone()),
+            SharedImpl::Mutex(lock) => SharedImpl::Mutex(lock.clone()),
+            SharedImpl::RwLock(lock) => SharedImpl::RwLock(lock.clone()),
+            SharedImpl::RwLockBox(lock) => SharedImpl::RwLockBox(lock.clone()),
             SharedImpl::Projection(x) => SharedImpl::Projection(x.clone()),
             SharedImpl::ProjectionRO(x) => SharedImpl::ProjectionRO(x.clone()),
         }
@@ -91,27 +468,36 @@ impl<T> SharedImpl<T> {
     pub fn try_unwrap(self) -> Result<T, Self> {
         match self {
             SharedImpl::Arc(x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(x),
+                Ok(x) => Ok(x.value),
                 Err(x) => Err(SharedImpl::Arc(x)),
             },
-            Self::ReadCopyUpdate(x, y) => match Arc::try_unwrap(y) {
-                Ok(y) => match Arc::try_unwrap(y.into_inner()) {
-                    Ok(y) => Ok(y),
-                    Err(y) => Err(SharedImpl::ReadCopyUpdate(x, Arc::new(RwLock::new(y)))),
+            SharedImpl::ArcBox(x) => match Arc::try_unwrap(x) {
+                Ok(x) => Ok(*x.value),
+                Err(x) => Err(SharedImpl::ArcBox(x)),
+            },
+            Self::ReadCopyUpdate(lock) => match Arc::try_unwrap(lock) {
+                Ok(lock) => match Arc::try_unwrap(lock.lock.into_inner()) {
+                    Ok(x) => Ok(x),
+                    Err(arc) => Err(SharedImpl::ReadCopyUpdate(Arc::new(make_shared_rcu(
+                        lock.cloner,
+                        arc,
+                    )))),
                 },
-                Err(y) => Err(SharedImpl::ReadCopyUpdate(x, y)),
+                Err(lock) => Err(SharedImpl::ReadCopyUpdate(lock)),
             },
-            SharedImpl::Mutex(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(policy.check(&x.0, x.1.into_inner())),
-                Err(x) => Err(SharedImpl::Mutex(policy, x)),
+            SharedImpl::Mutex(lock) => match Arc::try_unwrap(lock) {
+                Ok(lock) => Ok(lock.policy.check(&lock.poison, lock.container.into_inner())),
+                Err(lock) => Err(SharedImpl::Mutex(lock)),
             },
-            SharedImpl::RwLock(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(policy.check(&x.0, x.1.into_inner())),
-                Err(x) => Err(SharedImpl::RwLock(policy, x)),
+            SharedImpl::RwLock(lock) => match Arc::try_unwrap(lock) {
+                Ok(lock) => Ok(lock.policy.check(&lock.poison, lock.container.into_inner())),
+                Err(lock) => Err(SharedImpl::RwLock(lock)),
             },
-            SharedImpl::RwLockBox(policy, x) => match Arc::try_unwrap(x) {
-                Ok(x) => Ok(*policy.check(&x.0, x.1.into_inner())),
-                Err(x) => Err(SharedImpl::RwLockBox(policy, x)),
+            SharedImpl::RwLockBox(lock) => match Arc::try_unwrap(lock) {
+                Ok(lock) => Ok(lock
+                    .policy
+                    .check(&lock.poison, *lock.container.into_inner())),
+                Err(lock) => Err(SharedImpl::RwLockBox(lock)),
             },
             SharedImpl::Projection(_) => Err(self),
             SharedImpl::ProjectionRO(_) => Err(self),
@@ -122,26 +508,12 @@ impl<T> SharedImpl<T> {
 impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_read(&self) -> SharedReadLock<T> {
         match &self {
-            SharedImpl::Arc(x) => SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(x),
-                poison: None,
-            },
-            SharedImpl::ReadCopyUpdate(_, lock) => SharedReadLock {
-                inner: SharedReadLockInner::ReadCopyUpdate(lock.read().clone()),
-                poison: None,
-            },
-            SharedImpl::RwLock(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(&lock.0, lock.1.read())),
-                poison: policy.get_poison(&lock.0),
-            },
-            SharedImpl::RwLockBox(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::RwLockBox(policy.check(&lock.0, lock.1.read())),
-                poison: policy.get_poison(&lock.0),
-            },
-            SharedImpl::Mutex(policy, lock) => SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(&lock.0, lock.1.lock())),
-                poison: policy.get_poison(&lock.0),
-            },
+            SharedImpl::Arc(lock) => lock.lock_read_impl(),
+            SharedImpl::ArcBox(lock) => lock.lock_read_impl(),
+            SharedImpl::ReadCopyUpdate(lock) => lock.lock_read_impl(),
+            SharedImpl::RwLock(lock) => lock.lock_read_impl(),
+            SharedImpl::RwLockBox(lock) => lock.lock_read_impl(),
+            SharedImpl::Mutex(lock) => lock.lock_read_impl(),
             SharedImpl::Projection(p) => p.lock_read(),
             SharedImpl::ProjectionRO(p) => p.read(),
         }
@@ -149,26 +521,12 @@ impl<T: ?Sized> SharedImpl<T> {
 
     pub fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
         match &self {
-            SharedImpl::Arc(x) => Some(SharedReadLock {
-                inner: SharedReadLockInner::ArcRef(x),
-                poison: None,
-            }),
-            SharedImpl::ReadCopyUpdate(_, lock) => Some(SharedReadLock {
-                inner: SharedReadLockInner::ReadCopyUpdate(lock.read().clone()),
-                poison: None,
-            }),
-            SharedImpl::RwLock(policy, lock) => lock.1.try_read().map(|guard| SharedReadLock {
-                inner: SharedReadLockInner::RwLock(policy.check(&lock.0, guard)),
-                poison: policy.get_poison(&lock.0),
-            }),
-            SharedImpl::RwLockBox(policy, lock) => lock.1.try_read().map(|guard| SharedReadLock {
-                inner: SharedReadLockInner::RwLockBox(policy.check(&lock.0, guard)),
-                poison: policy.get_poison(&lock.0),
-            }),
-            SharedImpl::Mutex(policy, lock) => lock.1.try_lock().map(|guard| SharedReadLock {
-                inner: SharedReadLockInner::Mutex(policy.check(&lock.0, guard)),
-                poison: policy.get_poison(&lock.0),
-            }),
+            SharedImpl::Arc(lock) => lock.try_lock_read_impl(),
+            SharedImpl::ArcBox(lock) => lock.try_lock_read_impl(),
+            SharedImpl::ReadCopyUpdate(lock) => lock.try_lock_read_impl(),
+            SharedImpl::RwLock(lock) => lock.try_lock_read_impl(),
+            SharedImpl::RwLockBox(lock) => lock.try_lock_read_impl(),
+            SharedImpl::Mutex(lock) => lock.try_lock_read_impl(),
             SharedImpl::Projection(p) => p.try_lock_read(),
             SharedImpl::ProjectionRO(p) => p.try_lock_read(),
         }
@@ -176,26 +534,12 @@ impl<T: ?Sized> SharedImpl<T> {
 
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         match &self {
-            SharedImpl::Arc(_) => unreachable!("This should not be possible"),
-            SharedImpl::ReadCopyUpdate(cloner, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::ReadCopyUpdate(
-                    lock.deref(),
-                    Some(cloner(&*lock.read())),
-                ),
-                poison: None,
-            },
-            SharedImpl::RwLock(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(policy.check(&lock.0, lock.1.write())),
-                poison: policy.get_poison(&lock.0),
-            },
-            SharedImpl::RwLockBox(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::RwLockBox(policy.check(&lock.0, lock.1.write())),
-                poison: policy.get_poison(&lock.0),
-            },
-            SharedImpl::Mutex(policy, lock) => SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(policy.check(&lock.0, lock.1.lock())),
-                poison: policy.get_poison(&lock.0),
-            },
+            SharedImpl::Arc(lock) => lock.lock_write_impl(),
+            SharedImpl::ArcBox(lock) => lock.lock_write_impl(),
+            SharedImpl::ReadCopyUpdate(lock) => lock.lock_write_impl(),
+            SharedImpl::RwLock(lock) => lock.lock_write_impl(),
+            SharedImpl::RwLockBox(lock) => lock.lock_write_impl(),
+            SharedImpl::Mutex(lock) => lock.lock_write_impl(),
             SharedImpl::Projection(p) => p.lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
@@ -203,28 +547,12 @@ impl<T: ?Sized> SharedImpl<T> {
 
     pub fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
         match &self {
-            SharedImpl::Arc(_) => unreachable!("This should not be possible"),
-            SharedImpl::ReadCopyUpdate(cloner, lock) => Some(SharedWriteLock {
-                inner: SharedWriteLockInner::ReadCopyUpdate(
-                    lock.deref(),
-                    Some(cloner(&*lock.read())),
-                ),
-                poison: None,
-            }),
-            SharedImpl::RwLock(policy, lock) => lock.1.try_write().map(|guard| SharedWriteLock {
-                inner: SharedWriteLockInner::RwLock(policy.check(&lock.0, guard)),
-                poison: policy.get_poison(&lock.0),
-            }),
-            SharedImpl::RwLockBox(policy, lock) => {
-                lock.1.try_write().map(|guard| SharedWriteLock {
-                    inner: SharedWriteLockInner::RwLockBox(policy.check(&lock.0, guard)),
-                    poison: policy.get_poison(&lock.0),
-                })
-            }
-            SharedImpl::Mutex(policy, lock) => lock.1.try_lock().map(|guard| SharedWriteLock {
-                inner: SharedWriteLockInner::Mutex(policy.check(&lock.0, guard)),
-                poison: policy.get_poison(&lock.0),
-            }),
+            SharedImpl::Arc(lock) => lock.try_lock_write_impl(),
+            SharedImpl::ArcBox(lock) => lock.try_lock_write_impl(),
+            SharedImpl::ReadCopyUpdate(lock) => lock.try_lock_write_impl(),
+            SharedImpl::RwLock(lock) => lock.try_lock_write_impl(),
+            SharedImpl::RwLockBox(lock) => lock.try_lock_write_impl(),
+            SharedImpl::Mutex(lock) => lock.try_lock_write_impl(),
             SharedImpl::Projection(p) => p.try_lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
