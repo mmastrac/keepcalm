@@ -81,7 +81,7 @@ impl<'a, M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerWriteLock<'a, M, 
 }
 
 /// Raw implementations.
-pub enum Synchronizer<M, T: ?Sized> {
+pub enum SynchronizerUnsized<M, T: ?Sized> {
     /// Only usable by non-mutable shares.
     Arc(Arc<SynchronizerImpl<M, T>>),
     /// RCU-mode, which requires us to bring a cloning function along for the ride.
@@ -92,13 +92,13 @@ pub enum Synchronizer<M, T: ?Sized> {
     Mutex(Arc<SynchronizerImpl<M, Mutex<T>>>),
 }
 
-impl<M, T: ?Sized> SynchronizerMetadata<M> for Synchronizer<M, T> {
+impl<M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerUnsized<M, T> {
     fn metadata(&self) -> &M {
         with_ops!(self: x => &x.metadata)
     }
 }
 
-impl<M, T: ?Sized> Clone for Synchronizer<M, T> {
+impl<M, T: ?Sized> Clone for SynchronizerUnsized<M, T> {
     fn clone(&self) -> Self {
         match self {
             Self::Arc(x) => Self::Arc(x.clone()),
@@ -109,7 +109,7 @@ impl<M, T: ?Sized> Clone for Synchronizer<M, T> {
     }
 }
 
-impl<M, T: ?Sized> Debug for Synchronizer<M, T>
+impl<M, T: ?Sized> Debug for SynchronizerUnsized<M, T>
 where
     T: Debug,
 {
@@ -118,31 +118,31 @@ where
     }
 }
 
-impl<M, T> Synchronizer<M, T> {
-    pub fn new(metadata: M, sync_type: SynchronizerType, value: T) -> Synchronizer<M, T> {
+impl<M, T> SynchronizerUnsized<M, T> {
+    pub fn new(metadata: M, sync_type: SynchronizerType, value: T) -> SynchronizerUnsized<M, T> {
         match sync_type {
-            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerImpl {
+            SynchronizerType::Arc => SynchronizerUnsized::Arc(Arc::new(SynchronizerImpl {
                 metadata,
                 container: value,
             })),
             SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
-            SynchronizerType::Mutex => Synchronizer::Mutex(Arc::new(SynchronizerImpl {
+            SynchronizerType::Mutex => SynchronizerUnsized::Mutex(Arc::new(SynchronizerImpl {
                 metadata,
                 container: Mutex::new(value),
             })),
-            SynchronizerType::RwLock => Synchronizer::RwLock(Arc::new(SynchronizerImpl {
+            SynchronizerType::RwLock => SynchronizerUnsized::RwLock(Arc::new(SynchronizerImpl {
                 metadata,
                 container: RwLock::new(value),
             })),
         }
     }
 
-    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> Synchronizer<M, T>
+    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> SynchronizerUnsized<M, T>
     where
         T: Clone,
     {
         match sync_type {
-            SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerImpl {
+            SynchronizerType::RCU => SynchronizerUnsized::ReadCopyUpdate(Arc::new(SynchronizerImpl {
                 metadata,
                 container: RcuLock::new(value),
             })),
@@ -167,7 +167,7 @@ impl<M, T> Synchronizer<M, T> {
     }
 }
 
-impl<M, T: ?Sized> Synchronizer<M, T> {
+impl<M, T: ?Sized> SynchronizerUnsized<M, T> {
     pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
         with_ops!(self: x => x.lock_read())
     }
@@ -189,8 +189,8 @@ pub trait SynchronizerOps<M, T: ?Sized> {
         T: Sized;
     fn try_unwrap_or_sync(
         self,
-        f: impl Fn(Arc<Self>) -> Synchronizer<M, T>,
-    ) -> Result<T, Synchronizer<M, T>>
+        f: impl Fn(Arc<Self>) -> SynchronizerUnsized<M, T>,
+    ) -> Result<T, SynchronizerUnsized<M, T>>
     where
         Self: Sized,
         T: Sized,
