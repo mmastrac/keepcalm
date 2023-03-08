@@ -1,28 +1,23 @@
-use crate::{
-    rcu::{RcuLock, RcuReadGuard, RcuWriteGuard},
-    PoisonPolicy,
-};
+use crate::rcu::{RcuLock, RcuReadGuard, RcuWriteGuard};
 use parking_lot::{Mutex, MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
 use std::{fmt::Debug, sync::Arc};
 
-type Poison = std::sync::atomic::AtomicBool;
-
 /// Virtual dispatch.
 macro_rules! with_ops {
-    ($self:ident, $expr:ident ( $( $args:expr ),* ) ) => {
+    ($self:ident: $( $pat:pat ),+ => $expr:expr ) => {
         match $self {
-            Self::Arc(x) => x.$expr( $( $args ),* ),
-            Self::ReadCopyUpdate(x) => x.$expr( $( $args ),* ),
-            Self::RwLock(x) => x.$expr( $( $args ),* ),
-            Self::Mutex(x) => x.$expr( $( $args ),* ),
+            Self::Arc($($pat),+) => $expr,
+            Self::ReadCopyUpdate($($pat),+) => $expr,
+            Self::RwLock($($pat),+) => $expr,
+            Self::Mutex($($pat),+) => $expr,
         }
     };
 }
 
 /// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
 /// projection functions must be Send.
-unsafe impl<'a, T> Send for SynchronizerReadLock<'a, T> {}
-unsafe impl<'a, T> Send for SynchronizerWriteLock<'a, T> {}
+unsafe impl<'a, M: Send + Sync, T> Send for SynchronizerReadLock<'a, M, T> {}
+unsafe impl<'a, M: Send + Sync, T> Send for SynchronizerWriteLock<'a, M, T> {}
 
 pub enum SynchronizerType {
     Arc,
@@ -31,57 +26,57 @@ pub enum SynchronizerType {
     Mutex,
 }
 
-pub enum SynchronizerReadLock<'a, T: ?Sized> {
+pub enum SynchronizerReadLock<'a, M, T: ?Sized> {
     /// A read "lock" that's just a plain reference.
-    Arc(&'a T),
+    Arc(&'a M, &'a T),
     /// A read "lock" that's an arc, used for RCU mode.
-    ReadCopyUpdate(RcuReadGuard<T>),
+    ReadCopyUpdate(&'a M, RcuReadGuard<T>),
     /// RwLock's read lock.
-    RwLock(RwLockReadGuard<'a, T>),
+    RwLock(&'a M, RwLockReadGuard<'a, T>),
     /// Mutex's read lock.
-    Mutex(MutexGuard<'a, T>),
+    Mutex(&'a M, MutexGuard<'a, T>),
 }
 
-impl<'a, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, T> {
+impl<'a, M, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, M, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        with_ops!(self, deref())
+        with_ops!(self: _, x => x.deref())
     }
 }
 
-pub enum SynchronizerWriteLock<'a, T: ?Sized> {
-    Arc(&'a mut T),
-    ReadCopyUpdate(RcuWriteGuard<'a, T>),
-    RwLock(RwLockWriteGuard<'a, T>),
-    Mutex(MutexGuard<'a, T>),
+pub enum SynchronizerWriteLock<'a, M, T: ?Sized> {
+    Arc(&'a M, &'a mut T),
+    ReadCopyUpdate(&'a M, RcuWriteGuard<'a, T>),
+    RwLock(&'a M, RwLockWriteGuard<'a, T>),
+    Mutex(&'a M, MutexGuard<'a, T>),
 }
 
-impl<'a, T: ?Sized> std::ops::Deref for SynchronizerWriteLock<'a, T> {
+impl<'a, M, T: ?Sized> std::ops::Deref for SynchronizerWriteLock<'a, M, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        with_ops!(self, deref())
+        with_ops!(self: _, x => x.deref())
     }
 }
 
-impl<'a, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, T> {
+impl<'a, M, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, M, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        with_ops!(self, deref_mut())
+        with_ops!(self: _, x => x.deref_mut())
     }
 }
 
 /// Raw implementations.
-pub enum Synchronizer<T: ?Sized> {
+pub enum Synchronizer<M, T: ?Sized> {
     /// Only usable by non-mutable shares.
-    Arc(Arc<SynchronizerImpl<T>>),
+    Arc(Arc<SynchronizerImpl<M, T>>),
     /// RCU-mode, which requires us to bring a cloning function along for the ride.
-    ReadCopyUpdate(Arc<SynchronizerImpl<RcuLock<T>>>),
+    ReadCopyUpdate(Arc<SynchronizerImpl<M, RcuLock<T>>>),
     /// R/W lock.
-    RwLock(Arc<SynchronizerImpl<RwLock<T>>>),
+    RwLock(Arc<SynchronizerImpl<M, RwLock<T>>>),
     /// Mutex.
-    Mutex(Arc<SynchronizerImpl<Mutex<T>>>),
+    Mutex(Arc<SynchronizerImpl<M, Mutex<T>>>),
 }
 
-impl<T: ?Sized> Clone for Synchronizer<T> {
+impl<M, T: ?Sized> Clone for Synchronizer<M, T> {
     fn clone(&self) -> Self {
         match self {
             Self::Arc(x) => Self::Arc(x.clone()),
@@ -92,42 +87,44 @@ impl<T: ?Sized> Clone for Synchronizer<T> {
     }
 }
 
-impl<T: ?Sized> Debug for Synchronizer<T>
+impl<M, T: ?Sized> Debug for Synchronizer<M, T>
 where
     T: Debug,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        with_ops!(self, fmt(f))
+        with_ops!(self: x => x.fmt(f))
     }
 }
 
-impl<T> Synchronizer<T> {
-    pub fn new(policy: PoisonPolicy, sync_type: SynchronizerType, value: T) -> Synchronizer<T> {
+impl<M, T> Synchronizer<M, T> {
+    pub fn new(metadata: M, sync_type: SynchronizerType, value: T) -> Synchronizer<M, T> {
         match sync_type {
-            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerImpl { container: value })),
+            SynchronizerType::Arc => Synchronizer::Arc(Arc::new(SynchronizerImpl {
+                metadata,
+                container: value,
+            })),
             SynchronizerType::RCU => unimplemented!("RCU must be called with new_cloneable"),
             SynchronizerType::Mutex => Synchronizer::Mutex(Arc::new(SynchronizerImpl {
+                metadata,
                 container: Mutex::new(value),
             })),
             SynchronizerType::RwLock => Synchronizer::RwLock(Arc::new(SynchronizerImpl {
+                metadata,
                 container: RwLock::new(value),
             })),
         }
     }
 
-    pub fn new_cloneable(
-        policy: PoisonPolicy,
-        sync_type: SynchronizerType,
-        value: T,
-    ) -> Synchronizer<T>
+    pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> Synchronizer<M, T>
     where
         T: Clone,
     {
         match sync_type {
             SynchronizerType::RCU => Synchronizer::ReadCopyUpdate(Arc::new(SynchronizerImpl {
+                metadata,
                 container: RcuLock::new(value),
             })),
-            _ => Self::new(policy, sync_type, value),
+            _ => Self::new(metadata, sync_type, value),
         }
     }
 
@@ -148,56 +145,57 @@ impl<T> Synchronizer<T> {
     }
 }
 
-impl<T: ?Sized> Synchronizer<T> {
-    pub fn lock_read(&self) -> SynchronizerReadLock<T> {
-        with_ops!(self, lock_read())
+impl<M, T: ?Sized> Synchronizer<M, T> {
+    pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        with_ops!(self: x => x.lock_read())
     }
-    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
-        with_ops!(self, try_lock_read())
+    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+        with_ops!(self: x => x.try_lock_read())
     }
-    pub fn lock_write(&self) -> SynchronizerWriteLock<T> {
-        with_ops!(self, lock_write())
+    pub fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+        with_ops!(self: x => x.lock_write())
     }
-    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {
-        with_ops!(self, try_lock_write())
+    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+        with_ops!(self: x => x.try_lock_write())
     }
 }
 
-pub trait SynchronizerOps<T: ?Sized> {
+pub trait SynchronizerOps<M, T: ?Sized> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
         T: Sized;
     fn try_unwrap_or_sync(
         self,
-        f: impl Fn(Arc<Self>) -> Synchronizer<T>,
-    ) -> Result<T, Synchronizer<T>>
+        f: impl Fn(Arc<Self>) -> Synchronizer<M, T>,
+    ) -> Result<T, Synchronizer<M, T>>
     where
         Self: Sized,
         T: Sized,
     {
         self.try_unwrap().map_err(|x| f(Arc::new(x)))
     }
-    fn get_poison(&self) -> Option<(PoisonPolicy, &Poison)> {
-        None
-    }
-    fn lock_read(&self) -> SynchronizerReadLock<T>;
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>>;
-    fn lock_write(&self) -> SynchronizerWriteLock<T>;
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>>;
+    fn lock_read(&self) -> SynchronizerReadLock<M, T>;
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>>;
+    fn lock_write(&self) -> SynchronizerWriteLock<M, T>;
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>>;
 }
 
-pub struct SynchronizerImpl<C: ?Sized> {
+pub struct SynchronizerImpl<M, C: ?Sized> {
+    metadata: M,
     container: C,
 }
 
-impl <C: ?Sized> Debug for SynchronizerImpl<C> where C: Debug {
+impl<M, C: ?Sized> Debug for SynchronizerImpl<M, C>
+where
+    C: Debug,
+{
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.container.fmt(f)
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<RwLock<T>> {
+impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RwLock<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -206,26 +204,28 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<RwLock<T>> {
         Ok(self.container.into_inner())
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::RwLock(self.container.read())
+    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        SynchronizerReadLock::RwLock(&self.metadata, self.container.read())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
-        self.container.try_read().map(SynchronizerReadLock::RwLock)
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+        self.container
+            .try_read()
+            .map(|x| SynchronizerReadLock::RwLock(&self.metadata, x))
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<T> {
-        SynchronizerWriteLock::RwLock(self.container.write())
+    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+        SynchronizerWriteLock::RwLock(&self.metadata, self.container.write())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
         self.container
             .try_write()
-            .map(SynchronizerWriteLock::RwLock)
+            .map(|x| SynchronizerWriteLock::RwLock(&self.metadata, x))
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<Mutex<T>> {
+impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, Mutex<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -234,52 +234,58 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<Mutex<T>> {
         Ok(self.container.into_inner())
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::Mutex(self.container.lock())
+    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        SynchronizerReadLock::Mutex(&self.metadata, self.container.lock())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
-        self.container.try_lock().map(SynchronizerReadLock::Mutex)
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+        self.container
+            .try_lock()
+            .map(|x| SynchronizerReadLock::Mutex(&self.metadata, x))
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<T> {
-        SynchronizerWriteLock::Mutex(self.container.lock())
+    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+        SynchronizerWriteLock::Mutex(&self.metadata, self.container.lock())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {
-        self.container.try_lock().map(SynchronizerWriteLock::Mutex)
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+        self.container
+            .try_lock()
+            .map(|x| SynchronizerWriteLock::Mutex(&self.metadata, x))
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<RcuLock<T>> {
+impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RcuLock<T>> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
         T: Sized,
     {
-        self.container
-            .try_unwrap()
-            .map_err(|container| SynchronizerImpl { container })
+        let metadata = self.metadata;
+        self.container.try_unwrap().map_err(|container| Self {
+            metadata,
+            container,
+        })
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::ReadCopyUpdate(self.container.read())
+    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        SynchronizerReadLock::ReadCopyUpdate(&self.metadata, self.container.read())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
         Some(self.lock_read())
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<T> {
-        SynchronizerWriteLock::ReadCopyUpdate(self.container.write())
+    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+        SynchronizerWriteLock::ReadCopyUpdate(&self.metadata, self.container.write())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
         Some(self.lock_write())
     }
 }
 
-impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<T> {
+impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, T> {
     fn try_unwrap(self) -> Result<T, Self>
     where
         Self: Sized,
@@ -288,19 +294,19 @@ impl<T: ?Sized> SynchronizerOps<T> for SynchronizerImpl<T> {
         Ok(self.container)
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<T> {
-        SynchronizerReadLock::Arc(&self.container)
+    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+        SynchronizerReadLock::Arc(&self.metadata, &self.container)
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
         Some(self.lock_read())
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<T> {
+    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
         unreachable!()
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
         unreachable!()
     }
 }

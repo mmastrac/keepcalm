@@ -1,4 +1,4 @@
-use crate::implementation::{SharedImpl, SharedProjection};
+use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
 use crate::synchronizer::{Synchronizer, SynchronizerType};
@@ -59,7 +59,7 @@ where
     fn from(value: Box<T>) -> Self {
         Self {
             inner: SharedImpl::Box(Synchronizer::new(
-                PoisonPolicy::Ignore,
+                LockMetadata::poison_ignore(),
                 SynchronizerType::Arc,
                 value,
             )),
@@ -90,7 +90,7 @@ impl<T: ?Sized> Shared<T> {
     {
         Self {
             inner: SharedImpl::Box(Synchronizer::new(
-                PoisonPolicy::Ignore,
+                LockMetadata::poison_ignore(),
                 SynchronizerType::Arc,
                 t,
             )),
@@ -134,7 +134,11 @@ impl<T: Send> Shared<T> {
     /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
     pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedImpl::Value(Synchronizer::new(policy, SynchronizerType::Mutex, t)),
+            inner: SharedImpl::Value(Synchronizer::new(
+                LockMetadata::poison_policy(policy),
+                SynchronizerType::Mutex,
+                t,
+            )),
         }
     }
 }
@@ -144,7 +148,7 @@ impl<T: Send + Sync + 'static> Shared<T> {
     pub fn new(t: T) -> Self {
         Self {
             inner: SharedImpl::Value(Synchronizer::new(
-                PoisonPolicy::Panic,
+                LockMetadata::poison_panic(),
                 SynchronizerType::Arc,
                 t,
             )),
