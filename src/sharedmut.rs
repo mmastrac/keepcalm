@@ -90,7 +90,7 @@ impl<T: ?Sized> SharedMut<T> {
         Box<T>: Send + Sync + 'static,
     {
         make_shared_rw_value::<Box<T>, T>(SharedImpl::Box(Synchronizer::new(
-            PoisonPolicy::Panic,
+            LockMetadata::poison_panic(),
             SynchronizerType::RwLock,
             value,
         )))
@@ -272,7 +272,7 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
         };
 
         make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new(
-            policy,
+            LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,
         )))
@@ -301,7 +301,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
         };
 
         make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new_cloneable(
-            policy,
+            LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,
         )))

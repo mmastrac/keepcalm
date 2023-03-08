@@ -43,10 +43,33 @@ impl PoisonPolicy {
 
 type Poison = std::sync::atomic::AtomicBool;
 
+pub struct LockMetadata {
+    poison: Option<Poison>,
+}
+
+impl LockMetadata {
+    pub fn poison_panic() -> Self {
+        Self::poison_policy(PoisonPolicy::Panic)
+    }
+
+    pub fn poison_ignore() -> Self {
+        Self::poison_policy(PoisonPolicy::Ignore)
+    }
+
+    pub fn poison_policy(policy: PoisonPolicy) -> Self {
+        match policy {
+            PoisonPolicy::Ignore => Self { poison: None },
+            PoisonPolicy::Panic => Self {
+                poison: Some(Poison::new(false)),
+            },
+        }
+    }
+}
+
 #[allow(clippy::type_complexity)]
 pub enum SharedImpl<T: ?Sized> {
-    Value(Synchronizer<T>),
-    Box(Synchronizer<Box<T>>),
+    Value(Synchronizer<LockMetadata, T>),
+    Box(Synchronizer<LockMetadata, Box<T>>),
     Projection(Arc<dyn SharedMutProjection<T> + 'static>),
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }

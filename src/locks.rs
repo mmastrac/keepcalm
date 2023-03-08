@@ -2,7 +2,10 @@ use std::{fmt::Debug, sync::atomic::AtomicBool};
 
 use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
 
-use crate::synchronizer::{SynchronizerReadLock, SynchronizerWriteLock};
+use crate::{
+    implementation::LockMetadata,
+    synchronizer::{SynchronizerReadLock, SynchronizerWriteLock},
+};
 
 /// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
 /// projection functions must be Send.
@@ -11,8 +14,8 @@ unsafe impl<'a, T> Send for SharedWriteLockInner<'a, T> {}
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
     /// Delegate to Synchronizer.
-    Sync(SynchronizerReadLock<'a, T>),
-    SyncBox(SynchronizerReadLock<'a, Box<T>>),
+    Sync(SynchronizerReadLock<'a, LockMetadata, T>),
+    SyncBox(SynchronizerReadLock<'a, LockMetadata, Box<T>>),
     /// A read "lock" that's just a plain reference.
     ArcRef(&'a T),
     /// RwLock's read lock.
@@ -46,8 +49,8 @@ impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
     }
 }
 
-impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, T>> for SharedReadLock<'a, T> {
-    fn from(value: SynchronizerReadLock<'a, T>) -> Self {
+impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, T>> for SharedReadLock<'a, T> {
+    fn from(value: SynchronizerReadLock<'a, LockMetadata, T>) -> Self {
         SharedReadLock {
             inner: SharedReadLockInner::Sync(value),
             poison: None,
@@ -55,8 +58,8 @@ impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, T>> for SharedReadLock<'a, T> 
     }
 }
 
-impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, Box<T>>> for SharedReadLock<'a, T> {
-    fn from(value: SynchronizerReadLock<'a, Box<T>>) -> Self {
+impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, Box<T>>> for SharedReadLock<'a, T> {
+    fn from(value: SynchronizerReadLock<'a, LockMetadata, Box<T>>) -> Self {
         SharedReadLock {
             inner: SharedReadLockInner::SyncBox(value),
             poison: None,
@@ -66,8 +69,8 @@ impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, Box<T>>> for SharedReadLock<'a
 
 pub enum SharedWriteLockInner<'a, T: ?Sized> {
     /// Delegate to Synchronizer.
-    Sync(SynchronizerWriteLock<'a, T>),
-    SyncBox(SynchronizerWriteLock<'a, Box<T>>),
+    Sync(SynchronizerWriteLock<'a, LockMetadata, T>),
+    SyncBox(SynchronizerWriteLock<'a, LockMetadata, Box<T>>),
     RwLock(RwLockWriteGuard<'a, T>),
     Mutex(MutexGuard<'a, T>),
     Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
@@ -86,8 +89,8 @@ pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) poison: Option<&'a AtomicBool>,
 }
 
-impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, T>> for SharedWriteLock<'a, T> {
-    fn from(value: SynchronizerWriteLock<'a, T>) -> Self {
+impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, T>> for SharedWriteLock<'a, T> {
+    fn from(value: SynchronizerWriteLock<'a, LockMetadata, T>) -> Self {
         SharedWriteLock {
             inner: SharedWriteLockInner::Sync(value),
             poison: None,
@@ -95,8 +98,10 @@ impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, T>> for SharedWriteLock<'a, T
     }
 }
 
-impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, Box<T>>> for SharedWriteLock<'a, T> {
-    fn from(value: SynchronizerWriteLock<'a, Box<T>>) -> Self {
+impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, Box<T>>>
+    for SharedWriteLock<'a, T>
+{
+    fn from(value: SynchronizerWriteLock<'a, LockMetadata, Box<T>>) -> Self {
         SharedWriteLock {
             inner: SharedWriteLockInner::SyncBox(value),
             poison: None,
