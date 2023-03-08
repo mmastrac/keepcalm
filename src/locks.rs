@@ -1,9 +1,11 @@
 use std::{
     fmt::Debug,
-    sync::{atomic::AtomicBool, Arc},
+    sync::{atomic::AtomicBool},
 };
 
-use parking_lot::{MutexGuard, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use parking_lot::{MutexGuard, RwLockReadGuard, RwLockWriteGuard};
+
+use crate::synchronizer::{SynchronizerReadLock, SynchronizerWriteLock};
 
 /// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
 /// projection functions must be Send.
@@ -11,14 +13,13 @@ unsafe impl<'a, T> Send for SharedReadLockInner<'a, T> {}
 unsafe impl<'a, T> Send for SharedWriteLockInner<'a, T> {}
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
+    /// Delegate to Synchronizer.
+    Sync(SynchronizerReadLock<'a, T>),
+    SyncBox(SynchronizerReadLock<'a, Box<T>>),
     /// A read "lock" that's just a plain reference.
     ArcRef(&'a T),
-    /// A read "lock" that's an arc, used for RCU mode.
-    ReadCopyUpdate(Arc<T>),
     /// RwLock's read lock.
     RwLock(RwLockReadGuard<'a, T>),
-    /// RwLock's read lock, but for a Box.
-    RwLockBox(RwLockReadGuard<'a, Box<T>>),
     /// Mutex's read lock.
     Mutex(MutexGuard<'a, T>),
     /// A projected lock.
@@ -48,10 +49,23 @@ impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
     }
 }
 
+impl <'a, T: ?Sized> From<SynchronizerReadLock<'a, T>> for SharedReadLock<'a, T> {
+    fn from(value: SynchronizerReadLock<'a, T>) -> Self {
+        SharedReadLock { inner: SharedReadLockInner::Sync(value), poison: None }
+    }
+}
+
+impl <'a, T: ?Sized> From<SynchronizerReadLock<'a, Box<T>>> for SharedReadLock<'a, T> {
+    fn from(value: SynchronizerReadLock<'a, Box<T>>) -> Self {
+        SharedReadLock { inner: SharedReadLockInner::SyncBox(value), poison: None }
+    }
+}
+
 pub enum SharedWriteLockInner<'a, T: ?Sized> {
-    ReadCopyUpdate(&'a RwLock<Arc<T>>, Option<Box<T>>),
+    /// Delegate to Synchronizer.
+    Sync(SynchronizerWriteLock<'a, T>),
+    SyncBox(SynchronizerWriteLock<'a, Box<T>>),
     RwLock(RwLockWriteGuard<'a, T>),
-    RwLockBox(RwLockWriteGuard<'a, Box<T>>),
     Mutex(MutexGuard<'a, T>),
     Projection(Box<dyn std::ops::DerefMut<Target = T> + 'a>),
 }
@@ -69,15 +83,27 @@ pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) poison: Option<&'a AtomicBool>,
 }
 
+impl <'a, T: ?Sized> From<SynchronizerWriteLock<'a, T>> for SharedWriteLock<'a, T> {
+    fn from(value: SynchronizerWriteLock<'a, T>) -> Self {
+        SharedWriteLock { inner: SharedWriteLockInner::Sync(value), poison: None }
+    }
+}
+
+impl <'a, T: ?Sized> From<SynchronizerWriteLock<'a, Box<T>>> for SharedWriteLock<'a, T> {
+    fn from(value: SynchronizerWriteLock<'a, Box<T>>) -> Self {
+        SharedWriteLock { inner: SharedWriteLockInner::SyncBox(value), poison: None }
+    }
+}
+
 impl<'a, T: ?Sized> std::ops::Deref for SharedReadLock<'a, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         use SharedReadLockInner::*;
         match &self.inner {
+            Sync(x) => x,
+            SyncBox(x) => x,
             ArcRef(x) => x,
-            ReadCopyUpdate(x) => x,
             RwLock(x) => x,
-            RwLockBox(x) => x,
             Mutex(x) => x,
             Projection(x) => x,
         }
@@ -89,9 +115,9 @@ impl<'a, T: ?Sized> std::ops::Deref for SharedWriteLock<'a, T> {
     fn deref(&self) -> &Self::Target {
         use SharedWriteLockInner::*;
         match &self.inner {
-            ReadCopyUpdate(_, x) => x.as_ref().expect("Cannot deref after drop"),
+            Sync(x) => x,
+            SyncBox(x) => x,
             RwLock(x) => x,
-            RwLockBox(x) => x,
             Mutex(x) => x,
             Projection(x) => x,
         }
@@ -102,9 +128,9 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         use SharedWriteLockInner::*;
         match &mut self.inner {
-            ReadCopyUpdate(_, x) => x.as_mut().expect("Cannot deref after drop"),
+            Sync(x) => &mut *x,
+            SyncBox(x) => &mut *x,
             RwLock(x) => &mut *x,
-            RwLockBox(x) => &mut *x,
             Mutex(x) => &mut *x,
             Projection(x) => &mut *x,
         }
@@ -116,12 +142,6 @@ impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
         if let Some(poison) = self.poison {
             if std::thread::panicking() {
                 poison.store(true, std::sync::atomic::Ordering::Release);
-            }
-        }
-
-        if let SharedWriteLockInner::ReadCopyUpdate(a, b) = &mut self.inner {
-            if let Some(b) = b.take() {
-                *a.write() = b.into();
             }
         }
     }

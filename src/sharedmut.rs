@@ -1,6 +1,8 @@
 use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
+use crate::synchronizer::Synchronizer;
+use crate::synchronizer::SynchronizerType;
 use crate::Shared;
 use std::sync::Arc;
 
@@ -87,10 +89,11 @@ impl<T: ?Sized> SharedMut<T> {
     where
         Box<T>: Send + Sync + 'static,
     {
-        make_shared_rw_value::<Box<T>, T>(SharedImpl::RwLockBox(Arc::new(make_shared_rwlock_box(
+        make_shared_rw_value::<Box<T>, T>(SharedImpl::Box(Synchronizer::new(
             PoisonPolicy::Panic,
+            SynchronizerType::RwLock,
             value,
-        ))))
+        )))
     }
 }
 
@@ -262,13 +265,17 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
         implementation: ImplementationMut,
         policy: PoisonPolicy,
     ) -> Self {
-        make_shared_rw_value::<T, T>(match implementation {
-            ImplementationMut::Mutex => SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
-            ImplementationMut::RwLock => {
-                SharedImpl::RwLock(Arc::new(make_shared_rwlock(policy, t)))
-            }
+        let synchronizer_type = match implementation {
+            ImplementationMut::Mutex => SynchronizerType::Mutex,
             ImplementationMut::Rcu => unimplemented!("Use SharedMut::new_rcu instead"),
-        })
+            ImplementationMut::RwLock => SynchronizerType::RwLock,
+        };
+
+        make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new(
+            policy,
+            synchronizer_type,
+            t,
+        )))
     }
 }
 
@@ -287,16 +294,17 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
         implementation: ImplementationMut,
         policy: PoisonPolicy,
     ) -> Self {
-        make_shared_rw_value::<T, T>(match implementation {
-            ImplementationMut::Mutex => SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
-            ImplementationMut::RwLock => {
-                SharedImpl::RwLock(Arc::new(make_shared_rwlock(policy, t)))
-            }
-            ImplementationMut::Rcu => {
-                let cloner = |x: &Arc<T>| Box::new((**x).clone());
-                SharedImpl::ReadCopyUpdate(Arc::new(make_shared_rcu(cloner, Arc::new(t))))
-            }
-        })
+        let synchronizer_type = match implementation {
+            ImplementationMut::Mutex => SynchronizerType::Mutex,
+            ImplementationMut::Rcu => SynchronizerType::RCU,
+            ImplementationMut::RwLock => SynchronizerType::RwLock,
+        };
+
+        make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new_cloneable(
+            policy,
+            synchronizer_type,
+            t,
+        )))
     }
 }
 

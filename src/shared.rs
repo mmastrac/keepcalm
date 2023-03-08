@@ -1,8 +1,7 @@
-use crate::implementation::{
-    make_shared_arc, make_shared_arc_box, make_shared_mutex, SharedImpl, SharedProjection,
-};
+use crate::implementation::{SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner};
 use crate::projection::Projector;
+use crate::synchronizer::{Synchronizer, SynchronizerType};
 use crate::{PoisonPolicy, SharedMut};
 use std::sync::Arc;
 
@@ -59,7 +58,11 @@ where
 {
     fn from(value: Box<T>) -> Self {
         Self {
-            inner: SharedImpl::ArcBox(Arc::new(make_shared_arc_box(value))),
+            inner: SharedImpl::Box(Synchronizer::new(
+                PoisonPolicy::Ignore,
+                SynchronizerType::Arc,
+                value,
+            )),
         }
     }
 }
@@ -86,7 +89,11 @@ impl<T: ?Sized> Shared<T> {
         Box<T>: Send + Sync,
     {
         Self {
-            inner: SharedImpl::ArcBox(Arc::new(make_shared_arc_box(t))),
+            inner: SharedImpl::Box(Synchronizer::new(
+                PoisonPolicy::Ignore,
+                SynchronizerType::Arc,
+                t,
+            )),
         }
     }
 }
@@ -127,7 +134,7 @@ impl<T: Send> Shared<T> {
     /// Create a new [`Shared`], backed by a `Mutex` and optionally poisoning on panic.
     pub fn new_mutex_with_policy(t: T, policy: PoisonPolicy) -> Self {
         Self {
-            inner: SharedImpl::Mutex(Arc::new(make_shared_mutex(policy, t))),
+            inner: SharedImpl::Value(Synchronizer::new(policy, SynchronizerType::Mutex, t)),
         }
     }
 }
@@ -136,7 +143,11 @@ impl<T: Send + Sync + 'static> Shared<T> {
     /// Create a new [`Shared`], backed by an `Arc` and poisoning on panic.
     pub fn new(t: T) -> Self {
         Self {
-            inner: SharedImpl::Arc(Arc::new(make_shared_arc(t))),
+            inner: SharedImpl::Value(Synchronizer::new(
+                PoisonPolicy::Panic,
+                SynchronizerType::Arc,
+                t,
+            )),
         }
     }
 }
