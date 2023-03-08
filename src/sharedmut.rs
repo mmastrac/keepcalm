@@ -1,7 +1,7 @@
 use crate::implementation::*;
 use crate::locks::*;
 use crate::projection::*;
-use crate::synchronizer::Synchronizer;
+use crate::synchronizer::SynchronizerUnsized;
 use crate::synchronizer::SynchronizerType;
 use crate::Shared;
 use std::sync::Arc;
@@ -89,7 +89,7 @@ impl<T: ?Sized> SharedMut<T> {
     where
         Box<T>: Send + Sync + 'static,
     {
-        make_shared_rw_value::<Box<T>, T>(SharedImpl::Box(Synchronizer::new(
+        make_shared_rw_value::<Box<T>, T>(SharedImpl::Box(SynchronizerUnsized::new(
             LockMetadata::poison_panic(),
             SynchronizerType::RwLock,
             value,
@@ -267,7 +267,7 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
             ImplementationMut::RwLock => SynchronizerType::RwLock,
         };
 
-        make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new(
+        make_shared_rw_value::<T, T>(SharedImpl::Value(SynchronizerUnsized::new(
             LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,
@@ -296,7 +296,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
             ImplementationMut::RwLock => SynchronizerType::RwLock,
         };
 
-        make_shared_rw_value::<T, T>(SharedImpl::Value(Synchronizer::new_cloneable(
+        make_shared_rw_value::<T, T>(SharedImpl::Value(SynchronizerUnsized::new_cloneable(
             LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,

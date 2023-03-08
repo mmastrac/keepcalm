@@ -1,6 +1,6 @@
 use crate::{
     locks::*,
-    synchronizer::{Synchronizer, SynchronizerMetadata},
+    synchronizer::{SynchronizerUnsized, SynchronizerMetadata},
 };
 use once_cell::sync::OnceCell;
 use parking_lot::{Mutex, RwLock};
@@ -71,8 +71,9 @@ impl LockMetadata {
 
 #[allow(clippy::type_complexity)]
 pub enum SharedImpl<T: ?Sized> {
-    Value(Synchronizer<LockMetadata, T>),
-    Box(Synchronizer<LockMetadata, Box<T>>),
+    Value(SynchronizerUnsized<LockMetadata, T>),
+    Box(SynchronizerUnsized<LockMetadata, Box<T>>),
+    // Lazy(Arc<(OnceCell<Synchronizer<LockMetadata, T>>, fn() -> T)>),
     Projection(Arc<dyn SharedMutProjection<T> + 'static>),
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
