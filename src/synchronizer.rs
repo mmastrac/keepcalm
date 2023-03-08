@@ -26,6 +26,10 @@ pub enum SynchronizerType {
     Mutex,
 }
 
+pub trait SynchronizerMetadata<M> {
+    fn metadata(&self) -> &M;
+}
+
 pub enum SynchronizerReadLock<'a, M, T: ?Sized> {
     /// A read "lock" that's just a plain reference.
     Arc(&'a M, &'a T),
@@ -41,6 +45,12 @@ impl<'a, M, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, M, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         with_ops!(self: _, x => x.deref())
+    }
+}
+
+impl<'a, M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerReadLock<'a, M, T> {
+    fn metadata(&self) -> &M {
+        with_ops!(self: x, _ => x)
     }
 }
 
@@ -64,6 +74,12 @@ impl<'a, M, T: ?Sized> std::ops::DerefMut for SynchronizerWriteLock<'a, M, T> {
     }
 }
 
+impl<'a, M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerWriteLock<'a, M, T> {
+    fn metadata(&self) -> &M {
+        with_ops!(self: x, _ => x)
+    }
+}
+
 /// Raw implementations.
 pub enum Synchronizer<M, T: ?Sized> {
     /// Only usable by non-mutable shares.
@@ -74,6 +90,12 @@ pub enum Synchronizer<M, T: ?Sized> {
     RwLock(Arc<SynchronizerImpl<M, RwLock<T>>>),
     /// Mutex.
     Mutex(Arc<SynchronizerImpl<M, Mutex<T>>>),
+}
+
+impl<M, T: ?Sized> SynchronizerMetadata<M> for Synchronizer<M, T> {
+    fn metadata(&self) -> &M {
+        with_ops!(self: x => &x.metadata)
+    }
 }
 
 impl<M, T: ?Sized> Clone for Synchronizer<M, T> {

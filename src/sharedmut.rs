@@ -134,7 +134,6 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
         SharedReadLock {
             inner: SharedReadLockInner::Projection(Box::new(lock)),
-            poison: None,
         }
     }
 
@@ -160,7 +159,6 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
             Some(SharedReadLock {
                 inner: SharedReadLockInner::Projection(Box::new(lock)),
-                poison: None,
             })
         } else {
             None
@@ -193,7 +191,6 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
         SharedWriteLock {
             inner: SharedWriteLockInner::Projection(Box::new(lock)),
-            poison: None,
         }
     }
 
@@ -225,7 +222,6 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
 
             Some(SharedWriteLock {
                 inner: SharedWriteLockInner::Projection(Box::new(lock)),
-                poison: None,
             })
         } else {
             None
