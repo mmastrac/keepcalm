@@ -1,5 +1,5 @@
 use core::panic;
-use std::{future::Future, marker::PhantomData};
+use std::future::Future;
 
 trait BlockingFuture<B: BlockingFutureReturn<R>, R>: Future<Output = B> {}
 
@@ -12,7 +12,7 @@ trait BlockingFutureFn<R: Send + 'static>: Send + 'static {}
 /// We wrap our return types in this newtype to ensure that we can implement the traits we want without interference.
 struct BlockingFutureReturnNewType<T: Send + 'static>(T);
 
-impl <T: Send + 'static> From<T> for BlockingFutureReturnNewType<T> {
+impl<T: Send + 'static> From<T> for BlockingFutureReturnNewType<T> {
     fn from(value: T) -> Self {
         Self(value)
     }
@@ -57,10 +57,7 @@ async fn spawn_blocking<
 
 #[cfg(test)]
 mod test {
-    use owning_ref::OwningRef;
-    use yoke::Yoke;
-
-    use crate::{SharedMut, SharedReadLock};
+    use crate::{Shared, SharedMut, SharedReadLock};
 
     use super::*;
 
@@ -88,9 +85,13 @@ mod test {
         let x = spawn_blocking(async_std::task::spawn_blocking, || ().into()).await;
     }
 
-    fn test_blocking_with_lifetime() {
-        let shared = SharedMut::new(());
-        spawn_blocking(tokio::task::spawn_blocking, move || OwningRef::new(shared.read()).into());
-        
-    }   
+    #[tokio::test]
+    async fn test_blocking_with_lifetime() {
+        let shared = Shared::new("123");
+        let lock = spawn_blocking(tokio::task::spawn_blocking, move || {
+            shared.read_owned().into()
+        })
+        .await;
+        assert_eq!(lock, "123");
+    }
 }
