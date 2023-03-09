@@ -103,7 +103,6 @@ impl<T: Send> SharedGlobalMut<T> {
 
     /// Create a [`Shared`] reference, backed by this global. Note that the [`Shared`] cannot be unwrapped.
     pub fn shared(&'static self) -> Shared<T> {
-        // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
         SharedImpl::Projection(
             self.projection
                 .get_or_init(|| Arc::new(&self.inner))
@@ -114,7 +113,6 @@ impl<T: Send> SharedGlobalMut<T> {
 
     /// Create a [`SharedMut`] reference, backed by this global. Note that the [`SharedMut`] cannot be unwrapped.
     pub fn shared_mut(&'static self) -> SharedMut<T> {
-        // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
         SharedImpl::Projection(
             self.projection
                 .get_or_init(|| Arc::new(&self.inner))
