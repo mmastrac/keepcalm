@@ -363,6 +363,10 @@ impl<T: ?Sized> SharedMut<T> {
         self.inner_impl.try_lock_read()
     }
 
+    pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
+        self.inner_impl.lock_read_owned()
+    }
+
     /// Get a write lock for this [`SharedMut`].
     pub fn write(&self) -> SharedWriteLock<T> {
         self.inner_impl.lock_write()
@@ -371,6 +375,10 @@ impl<T: ?Sized> SharedMut<T> {
     /// Try to get a write lock for this [`SharedMut`], or return [`None`] if we couldn't.
     pub fn try_write(&self) -> Option<SharedWriteLock<T>> {
         self.inner_impl.try_lock_write()
+    }
+
+    pub(crate) fn write_owned(&self) -> SharedWriteLockOwned<T> {
+        self.inner_impl.lock_write_owned()
     }
 }
 

@@ -132,6 +132,14 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    pub(crate) fn lock_read_owned(&self) -> SharedReadLockOwned<T> {
+        let container = self.clone();
+        // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
+        let inner =
+            unsafe { std::mem::transmute::<_, SharedReadLock<'static, T>>(container.lock_read()) };
+        SharedReadLockOwned { inner, container }
+    }
+
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         self.check_poison();
         match &self {
@@ -150,6 +158,15 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Projection(p) => p.try_lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
+    }
+
+    pub(crate) fn lock_write_owned(&self) -> SharedWriteLockOwned<T> {
+        let container = self.clone();
+        // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
+        let inner = unsafe {
+            std::mem::transmute::<_, SharedWriteLock<'static, T>>(container.lock_write())
+        };
+        SharedWriteLockOwned { inner, container }
     }
 }
 

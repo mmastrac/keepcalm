@@ -1,5 +1,5 @@
 use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
-use crate::locks::{SharedReadLock, SharedReadLockInner};
+use crate::locks::{SharedReadLock, SharedReadLockInner, SharedReadLockOwned};
 use crate::projection::Projector;
 use crate::synchronizer::{SynchronizerType, SynchronizerUnsized};
 use crate::{PoisonPolicy, SharedMut};
@@ -252,6 +252,10 @@ impl<T: ?Sized> Shared<T> {
     /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.
     pub fn try_read(&self) -> Option<SharedReadLock<T>> {
         self.inner.try_lock_read()
+    }
+
+    pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
+        self.inner.lock_read_owned()
     }
 }
 

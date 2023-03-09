@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 use crate::{
-    implementation::LockMetadata,
+    implementation::{LockMetadata, SharedImpl},
     synchronizer::{SynchronizerMetadata, SynchronizerReadLock, SynchronizerWriteLock},
 };
 
@@ -64,6 +64,42 @@ impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, Box<T>>> for Sha
         SharedReadLock {
             inner: SharedReadLockInner::SyncBox(value),
         }
+    }
+}
+
+pub struct SharedReadLockOwned<T: ?Sized + 'static> {
+    // Note the ordering of the fields - we want to drop the inner lock before the container!
+    pub(crate) inner: SharedReadLock<'static, T>,
+    // Container is never used, but we keep it around for safety/reference purposes
+    #[allow(unused)]
+    pub(crate) container: SharedImpl<T>,
+}
+
+pub struct SharedWriteLockOwned<T: ?Sized + 'static> {
+    // Note the ordering of the fields - we want to drop the inner lock before the container!
+    pub(crate) inner: SharedWriteLock<'static, T>,
+    // Container is never used, but we keep it around for safety/reference purposes
+    #[allow(unused)]
+    pub(crate) container: SharedImpl<T>,
+}
+
+impl<T: ?Sized + 'static> std::ops::Deref for SharedReadLockOwned<T> {
+    type Target = <SharedReadLock<'static, T> as std::ops::Deref>::Target;
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T: ?Sized + 'static> std::ops::Deref for SharedWriteLockOwned<T> {
+    type Target = <SharedWriteLock<'static, T> as std::ops::Deref>::Target;
+    fn deref(&self) -> &Self::Target {
+        self.inner.deref()
+    }
+}
+
+impl<T: ?Sized + 'static> std::ops::DerefMut for SharedWriteLockOwned<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.inner.deref_mut()
     }
 }
 
@@ -163,9 +199,9 @@ impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
 /// Defines some common delegated operations on the underlying values, allowing the consumer to avoid having to dereference the
 /// lock directly. This could likely be made generic rather than using macros.
 macro_rules! implement_lock_delegates {
-    ($for:ident) => {
+    ($for:ty) => {
         /// Implement Debug where T: Debug.
-        impl<'a, T: ?Sized> std::fmt::Debug for $for<'a, T>
+        impl<'a, T: ?Sized> std::fmt::Debug for $for
         where
             T: Debug,
         {
@@ -175,7 +211,7 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement Display where T: Display.
-        impl<'a, T: ?Sized> std::fmt::Display for $for<'a, T>
+        impl<'a, T: ?Sized> std::fmt::Display for $for
         where
             T: std::fmt::Display,
         {
@@ -185,7 +221,7 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement Error where T: Error
-        impl<'a, T: ?Sized> std::error::Error for $for<'a, T>
+        impl<'a, T: ?Sized> std::error::Error for $for
         where
             T: std::error::Error,
         {
@@ -205,14 +241,14 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement Borrow
-        impl<'a, T: ?Sized> std::borrow::Borrow<T> for $for<'a, T> {
+        impl<'a, T: ?Sized> std::borrow::Borrow<T> for $for {
             fn borrow(&self) -> &T {
                 &**self
             }
         }
 
         /// Implement AsRef where T: AsRef
-        impl<'a, T: ?Sized, U: ?Sized> AsRef<U> for $for<'a, T>
+        impl<'a, T: ?Sized, U: ?Sized> AsRef<U> for $for
         where
             T: AsRef<U>,
         {
@@ -222,7 +258,7 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement AsMut where T: AsMut
-        impl<'a, T: ?Sized, U: ?Sized> AsMut<U> for $for<'a, T>
+        impl<'a, T: ?Sized, U: ?Sized> AsMut<U> for $for
         where
             T: AsMut<U>,
             Self: std::ops::DerefMut<Target = T>,
@@ -233,7 +269,7 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement PartialEq, but only for raw types.
-        impl<'a, T: ?Sized, Rhs: ?Sized> PartialEq<Rhs> for $for<'a, T>
+        impl<'a, T: ?Sized, Rhs: ?Sized> PartialEq<Rhs> for $for
         where
             T: PartialEq<Rhs>,
         {
@@ -243,7 +279,7 @@ macro_rules! implement_lock_delegates {
         }
 
         /// Implement PartialOrd, but only for raw types.
-        impl<'a, T: ?Sized, Rhs: ?Sized> PartialOrd<Rhs> for $for<'a, T>
+        impl<'a, T: ?Sized, Rhs: ?Sized> PartialOrd<Rhs> for $for
         where
             T: PartialOrd<Rhs>,
         {
@@ -252,12 +288,14 @@ macro_rules! implement_lock_delegates {
             }
         }
 
-        impl<'a, T: ?Sized> Unpin for $for<'a, T> {}
+        impl<'a, T: ?Sized> Unpin for $for {}
     };
 }
 
-implement_lock_delegates!(SharedReadLock);
-implement_lock_delegates!(SharedWriteLock);
+implement_lock_delegates!(SharedReadLock<'a, T>);
+implement_lock_delegates!(SharedReadLockOwned<T>);
+implement_lock_delegates!(SharedWriteLock<'a, T>);
+implement_lock_delegates!(SharedWriteLockOwned<T>);
 
 /// Simple test for `Send` on the read/write locks for non-send types. Note that locks are always `Send`, as we
 /// ensure that underlying locked objects are `Send` at construction time.
