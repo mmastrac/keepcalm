@@ -40,7 +40,8 @@ impl<F: FnOnce() -> BlockingFutureReturnNewType<R> + Send + 'static, R: Send + '
 {
 }
 
-/// Generic spawn_blocking implementation
+/// Generic, `async` spawn_blocking implementation that erases the underlying future type of the `spawn_blocking` method
+/// that is passed to it.
 async fn spawn_blocking<
     T: Send + 'static,
     FN: FnOnce() -> BlockingFutureReturnNewType<T>,
@@ -56,6 +57,11 @@ async fn spawn_blocking<
 
 #[cfg(test)]
 mod test {
+    use owning_ref::OwningRef;
+    use yoke::Yoke;
+
+    use crate::{SharedMut, SharedReadLock};
+
     use super::*;
 
     fn ensure_blocking_future<R, B: BlockingFutureReturn<R>, F: BlockingFuture<B, R>>() {
@@ -76,9 +82,15 @@ mod test {
         let ret = tokio::task::spawn_blocking(f);
     }
 
-    fn ensure_blocking_runners() {
-        let _ = spawn_blocking(tokio::task::spawn_blocking, || ().into());
-        let _ = spawn_blocking(smol::unblock, || ().into());
-        let _ = spawn_blocking(async_std::task::spawn_blocking, || ().into());
+    async fn ensure_blocking_runners() {
+        let x = spawn_blocking(tokio::task::spawn_blocking, || ().into()).await;
+        let x = spawn_blocking(smol::unblock, || ().into()).await;
+        let x = spawn_blocking(async_std::task::spawn_blocking, || ().into()).await;
     }
+
+    fn test_blocking_with_lifetime() {
+        let shared = SharedMut::new(());
+        spawn_blocking(tokio::task::spawn_blocking, move || OwningRef::new(shared.read()).into());
+        
+    }   
 }
