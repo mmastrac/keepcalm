@@ -1,74 +1,84 @@
-#[macro_export]
-macro_rules! async_read {
-    ($lock:ident, $($fn:ident)::+) => {
-        async {
-            trait GetTFrom<T> {
-                fn get(self) -> T;
-            }
+use core::panic;
+use std::{future::Future, marker::PhantomData};
 
-            impl <T> GetTFrom<T> for T {
-                fn get(self) -> T {
-                    self
-                }
-            }
+trait BlockingFuture<B: BlockingFutureReturn<R>, R>: Future<Output = B> {}
 
-            impl <T, E: std::error::Error> GetTFrom<T> for Result<T, E> {
-                fn get(self) -> T {
-                    self.expect("Failed to lock asynchronously")
-                }
-            }
-
-            let lock: $crate::SharedReadLock<_> = $($fn)::*(|| $lock.read()).await.get();
-            lock
-        }
-    };
+trait BlockingFutureReturn<R> {
+    fn map(self) -> R;
 }
 
-#[macro_export]
-macro_rules! async_write {
-    ($lock:ident, $($fn:ident)::+) => {
-        async {
-            trait GetTFrom<T> {
-                fn get(self) -> T;
-            }
+trait BlockingFutureFn<R: Send + 'static>: Send + 'static {}
 
-            impl <T> GetTFrom<T> for T {
-                fn get(self) -> T {
-                    self
-                }
-            }
+/// We wrap our return types in this newtype to ensure that we can implement the traits we want without interference.
+struct BlockingFutureReturnNewType<T: Send + 'static>(T);
 
-            impl <T, E: std::error::Error> GetTFrom<T> for Result<T, E> {
-                fn get(self) -> T {
-                    self.expect("Failed to lock asynchronously")
-                }
-            }
+impl <T: Send + 'static> From<T> for BlockingFutureReturnNewType<T> {
+    fn from(value: T) -> Self {
+        Self(value)
+    }
+}
 
-            let lock: $crate::SharedWriteLock<_> = $($fn)::*(|| $lock.write()).await.get();
-            lock
+impl<T: Send + 'static> BlockingFutureReturn<T> for BlockingFutureReturnNewType<T> {
+    fn map(self) -> T {
+        self.0
+    }
+}
+
+impl<T: Send + 'static, E> BlockingFutureReturn<T> for Result<BlockingFutureReturnNewType<T>, E> {
+    fn map(self) -> T {
+        match self {
+            Ok(t) => t.0,
+            Err(_) => panic!("Panic!"),
         }
-    };
+    }
+}
+
+impl<T, R: BlockingFutureReturn<T>, F: Future<Output = R>> BlockingFuture<R, T> for F {}
+
+impl<F: FnOnce() -> BlockingFutureReturnNewType<R> + Send + 'static, R: Send + 'static>
+    BlockingFutureFn<R> for F
+{
+}
+
+/// Generic spawn_blocking implementation
+async fn spawn_blocking<
+    T: Send + 'static,
+    FN: FnOnce() -> BlockingFutureReturnNewType<T>,
+    B: BlockingFutureReturn<T>,
+    F: BlockingFuture<B, T>,
+>(
+    f: fn(FN) -> F,
+    f2: FN,
+) -> T {
+    let res = f(f2).await;
+    res.map()
 }
 
 #[cfg(test)]
 mod test {
-    use crate::SharedGlobalMut;
+    use super::*;
 
-    #[tokio::test]
-    async fn test_async_lock_tokio() {
-        static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
-        assert_eq!(async_read!(GLOBAL, tokio::task::spawn_blocking).await, 1);
-        *async_write!(GLOBAL, tokio::task::spawn_blocking).await = 2;
-        assert_eq!(async_write!(GLOBAL, tokio::task::spawn_blocking).await, 2);
+    fn ensure_blocking_future<R, B: BlockingFutureReturn<R>, F: BlockingFuture<B, R>>() {
+        // Rename this type because it's so long
+        type Empty = BlockingFutureReturnNewType<()>;
+        ensure_blocking_future::<(), _, tokio::task::JoinHandle<Empty>>();
+        ensure_blocking_future::<(), _, smol::Task<Empty>>();
+        ensure_blocking_future::<(), _, async_std::task::JoinHandle<Empty>>();
     }
 
-    #[test]
-    fn test_async_lock_smol() {
-        static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
-        smol::block_on(async {
-            assert_eq!(async_read!(GLOBAL, smol::unblock).await, 1);
-            *async_write!(GLOBAL, smol::unblock).await = 2;
-            assert_eq!(async_write!(GLOBAL, smol::unblock).await, 2);
-        });
+    fn ensure_blocking_fn<R: Send + 'static, F: BlockingFutureFn<R>>(f: F) -> F {
+        f
+    }
+
+    fn ensure_blocking_fn_parent() {
+        let f = || BlockingFutureReturnNewType::<()>(());
+        let f = ensure_blocking_fn(f);
+        let ret = tokio::task::spawn_blocking(f);
+    }
+
+    fn ensure_blocking_runners() {
+        let _ = spawn_blocking(tokio::task::spawn_blocking, || ().into());
+        let _ = spawn_blocking(smol::unblock, || ().into());
+        let _ = spawn_blocking(async_std::task::spawn_blocking, || ().into());
     }
 }
