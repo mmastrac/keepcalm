@@ -27,14 +27,20 @@ trait ErasedFutureNew<F: Future<Output = T2> + Unpin + 'static, T2, T> {
 }
 
 impl<T> ErasedFuture<T> {
-    pub fn new<F: Future<Output = T> + Unpin + 'static>(f: F) -> Self {
+    pub fn new<F: Future<Output = T> + Send + Unpin + 'static>(f: F) -> Self {
         <Self as ErasedFutureNew<F, T, T>>::new_mapped(f, std::convert::identity)
     }
 
-    pub fn new_map<T2, F: Future<Output = T2> + Unpin + 'static>(f: F, map: fn(T2) -> T) -> Self {
+    pub fn new_map<T2, F: Future<Output = T2> + Send + Unpin + 'static>(
+        f: F,
+        map: fn(T2) -> T,
+    ) -> Self {
         <Self as ErasedFutureNew<F, T2, T>>::new_mapped(f, map)
     }
 }
+
+/// UNSAFETY: We require the underlying future to be Send
+unsafe impl<T> Send for ErasedFuture<T> {}
 
 impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
     for ErasedFuture<T>

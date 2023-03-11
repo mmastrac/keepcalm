@@ -211,6 +211,18 @@ mod test {
     }
 
     #[tokio::test]
+    async fn test_blocking_is_send() {
+        fn ensure_send<T: Send>(t: T) -> T {
+            t
+        }
+
+        let spawner = make_spawner!(tokio::task::spawn_blocking);
+        let f = spawner.spawn_blocking_map(1, |x| *x);
+        let f = ensure_send(f);
+        assert_eq!(f.await, 1);
+    }
+
+    #[tokio::test]
     async fn test_blocking_panic() {
         let spawner = make_spawner!(tokio::task::spawn_blocking);
         let out = spawner
