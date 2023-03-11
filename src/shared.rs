@@ -1,5 +1,5 @@
 use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
-use crate::locks::{SharedReadLock, SharedReadLockInner};
+use crate::locks::{SharedReadLock, SharedReadLockInner, SharedReadLockOwned};
 use crate::projection::Projector;
 use crate::synchronizer::{SynchronizerType, SynchronizerUnsized};
 use crate::{PoisonPolicy, SharedMut};
@@ -14,11 +14,6 @@ use std::sync::Arc;
 pub struct Shared<T: ?Sized> {
     inner: SharedImpl<T>,
 }
-
-// UNSAFETY: The construction and projection of Shared requires Send + Sync, so we can guarantee that
-// all instances of SharedMutImpl are Send + Sync.
-unsafe impl<T: ?Sized> Send for Shared<T> {}
-unsafe impl<T: ?Sized> Sync for Shared<T> {}
 
 impl<T: ?Sized> std::panic::RefUnwindSafe for Shared<T> {}
 
@@ -252,6 +247,22 @@ impl<T: ?Sized> Shared<T> {
     /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.
     pub fn try_read(&self) -> Option<SharedReadLock<T>> {
         self.inner.try_lock_read()
+    }
+
+    #[cfg(feature = "async_experimental")]
+    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLock<T>
+    where
+        T: 'static,
+    {
+        let lock = spawner
+            .spawn_blocking_map(self.clone(), |lock| lock.read_owned())
+            .await;
+        return unsafe { lock.unsafe_reattach(&self.inner) };
+    }
+
+    #[allow(unused)]
+    pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
+        self.inner.lock_read_owned()
     }
 }
 

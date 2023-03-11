@@ -60,6 +60,11 @@ pub enum SharedImpl<T: ?Sized> {
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
+// UNSAFETY: The construction and projection of SharedImpl requires Send + Sync, so we can guarantee that
+// all instances of SharedMutImpl are Send + Sync.
+unsafe impl<T: ?Sized> Send for SharedImpl<T> {}
+unsafe impl<T: ?Sized> Sync for SharedImpl<T> {}
+
 impl<T: ?Sized + Debug> Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -132,6 +137,15 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    #[allow(unused)]
+    pub(crate) fn lock_read_owned(&self) -> SharedReadLockOwned<T> {
+        let container = self.clone();
+        // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
+        let inner =
+            unsafe { std::mem::transmute::<_, SharedReadLock<'static, T>>(container.lock_read()) };
+        SharedReadLockOwned { inner, container }
+    }
+
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         self.check_poison();
         match &self {
@@ -150,6 +164,16 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Projection(p) => p.try_lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
         }
+    }
+
+    #[allow(unused)]
+    pub(crate) fn lock_write_owned(&self) -> SharedWriteLockOwned<T> {
+        let container = self.clone();
+        // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
+        let inner = unsafe {
+            std::mem::transmute::<_, SharedWriteLock<'static, T>>(container.lock_write())
+        };
+        SharedWriteLockOwned { inner, container }
     }
 }
 

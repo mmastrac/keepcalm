@@ -16,6 +16,12 @@ jobs:
     - uses: actions/checkout@v3
     - name: Build (default)
       run: cargo build --verbose
+    - name: Cargo clippy
+      run: cargo clippy
+    - name: Cargo clippy (all features)
+      run: cargo clippy --all-features
+    - name: Run tests
+      run: cargo test --verbose
     - name: Run tests (all features)
       run: cargo test --all-features --verbose
     - name: Run docs

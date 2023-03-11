@@ -363,6 +363,11 @@ impl<T: ?Sized> SharedMut<T> {
         self.inner_impl.try_lock_read()
     }
 
+    #[allow(unused)]
+    pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
+        self.inner_impl.lock_read_owned()
+    }
+
     /// Get a write lock for this [`SharedMut`].
     pub fn write(&self) -> SharedWriteLock<T> {
         self.inner_impl.lock_write()
@@ -371,6 +376,39 @@ impl<T: ?Sized> SharedMut<T> {
     /// Try to get a write lock for this [`SharedMut`], or return [`None`] if we couldn't.
     pub fn try_write(&self) -> Option<SharedWriteLock<T>> {
         self.inner_impl.try_lock_write()
+    }
+
+    #[allow(unused)]
+    pub(crate) fn write_owned(&self) -> SharedWriteLockOwned<T> {
+        self.inner_impl.lock_write_owned()
+    }
+
+    #[cfg(feature = "async_experimental")]
+    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLock<T>
+    where
+        T: 'static,
+    {
+        if let Some(lock) = self.try_read() {
+            return lock;
+        }
+        let lock = spawner
+            .spawn_blocking_map(self.clone(), |lock| lock.read_owned())
+            .await;
+        return unsafe { lock.unsafe_reattach(&self.inner_impl) };
+    }
+
+    #[cfg(feature = "async_experimental")]
+    pub async fn write_async(&self, spawner: crate::Spawner) -> SharedWriteLock<T>
+    where
+        T: 'static,
+    {
+        if let Some(lock) = self.try_write() {
+            return lock;
+        }
+        let lock = spawner
+            .spawn_blocking_map(self.clone(), |lock| lock.write_owned())
+            .await;
+        return unsafe { lock.unsafe_reattach(&self.inner_impl) };
     }
 }
 
