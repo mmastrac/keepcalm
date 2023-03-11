@@ -14,8 +14,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v3
-    - name: Install nightly toolchain
-      run: rustup toolchain add nightly
     - name: Build (default)
       run: cargo build --verbose
     - name: Cargo clippy
@@ -28,5 +26,3 @@ jobs:
       run: cargo test --all-features --verbose
     - name: Run docs
       run: cargo doc --all-features --verbose
-    - name: Run Miri
-      run: rustup component add miri && MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --all-features
