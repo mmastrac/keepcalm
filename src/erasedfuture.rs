@@ -57,6 +57,7 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
         let mut erased_future = MaybeUninit::<ErasedFuture<T>>::uninit();
         let init_ptr = erased_future.as_mut_ptr();
 
+        // UNSAFETY: We assume this block cannot panic
         unsafe {
             // Move f to the buffer and forget about it - we will drop it later
             let bufptr = (*init_ptr).buffer.as_mut_ptr() as *mut F;
@@ -65,6 +66,8 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
 
             // Zero out the end of the buffer to avoid uninitialized bytes
             (*init_ptr).buffer[std::mem::size_of::<F>()..FUTURE_BUF_SIZE].fill(0);
+
+            // Store the map function as a boring () -> () function pointer to erase the type
             (*init_ptr).map_fn = map as *const fn();
 
             // Create a function that makes fat pointers from thin ones, with knowledge of the original type F
@@ -79,6 +82,7 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
                 Pin::new(f.as_mut().unwrap()).poll(cx).map(map)
             };
 
+            // UNSAFETY: All fields initialized at this point
             erased_future.assume_init()
         }
     }

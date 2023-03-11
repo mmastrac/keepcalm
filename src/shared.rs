@@ -15,11 +15,6 @@ pub struct Shared<T: ?Sized> {
     inner: SharedImpl<T>,
 }
 
-// UNSAFETY: The construction and projection of Shared requires Send + Sync, so we can guarantee that
-// all instances of SharedMutImpl are Send + Sync.
-unsafe impl<T: ?Sized> Send for Shared<T> {}
-unsafe impl<T: ?Sized> Sync for Shared<T> {}
-
 impl<T: ?Sized> std::panic::RefUnwindSafe for Shared<T> {}
 
 #[cfg(feature = "serde")]

@@ -7,8 +7,8 @@ use crate::{
 
 /// UNSAFETY: We can implement this for all types, as T must always be Send unless it is a projection, in which case the
 /// projection functions must be Send.
-unsafe impl<'a, T> Send for SharedReadLockInner<'a, T> {}
-unsafe impl<'a, T> Send for SharedWriteLockInner<'a, T> {}
+unsafe impl<'a, T: ?Sized> Send for SharedReadLockInner<'a, T> {}
+unsafe impl<'a, T: ?Sized> Send for SharedWriteLockInner<'a, T> {}
 
 pub enum SharedReadLockInner<'a, T: ?Sized> {
     /// Delegate to Synchronizer.

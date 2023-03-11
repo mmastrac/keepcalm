@@ -1,5 +1,9 @@
-use core::panic;
-use std::{future::Future, mem::MaybeUninit, sync::atomic::AtomicPtr};
+use std::{
+    future::Future,
+    mem::MaybeUninit,
+    panic::{RefUnwindSafe, UnwindSafe},
+    sync::atomic::{AtomicBool, AtomicPtr, Ordering},
+};
 
 use crate::{erasedfuture::ErasedFuture, Shared};
 
@@ -62,17 +66,19 @@ async fn spawn_blocking<
 #[allow(clippy::type_complexity)]
 pub struct Spawner {
     spawner: Box<
-        dyn Fn(
-            AtomicPtr<()>,
-            AtomicPtr<()>,
-            AtomicPtr<()>,
-            fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
-        ) -> ErasedFuture<()>,
+        dyn (Fn(
+                AtomicPtr<()>,
+                AtomicPtr<()>,
+                AtomicPtr<()>,
+                fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
+            ) -> ErasedFuture<()>)
+            + UnwindSafe
+            + RefUnwindSafe,
     >,
 }
 
 impl Spawner {
-    pub(crate) async fn spawn_blocking_map<A, B, F: FnOnce(&mut A) -> B>(
+    pub(crate) async fn spawn_blocking_map<A: Send, B: Send, F: FnOnce(&mut A) -> B>(
         &self,
         mut a: A,
         f: F,
@@ -80,22 +86,32 @@ impl Spawner {
         let input = AtomicPtr::new(&mut a as *mut A as *mut ());
         let mut output_storage = MaybeUninit::<B>::uninit();
         let output = AtomicPtr::new(output_storage.as_mut_ptr() as *mut ());
-        let mut f = Some(f);
-        let context = AtomicPtr::new(&mut f as *mut Option<F> as *mut ());
+        let mut f = (AtomicBool::new(false), Some(f));
+        let context = AtomicPtr::new((&mut f) as *mut (AtomicBool, Option<F>) as *mut ());
         (self.spawner)(context, input, output, |context, input, output| {
             let input = input.into_inner() as *mut A;
             let output = output.into_inner() as *mut B;
-            let f = context.into_inner() as *mut Option<F>;
 
+            // UNSAFETY:
+            // A: We have a mut reference to this, and if we panic, the outer function will drop it
+            // B: We have the MaybeUninit for B, and we set a flag if we've successfully initialized it
+            // F: We own the function at this point and will drop it after we call it.
             unsafe {
-                std::ptr::write(
-                    output,
-                    (f.as_mut().unwrap().take().unwrap())(input.as_mut().unwrap()),
-                );
+                let f = (context.into_inner() as *mut (AtomicBool, Option<F>))
+                    .as_mut()
+                    .unwrap();
+                std::ptr::write(output, (f.1.take().unwrap())(input.as_mut().unwrap()));
+                f.0.store(true, Ordering::Release);
             }
         })
         .await;
-        unsafe { output_storage.assume_init() }
+
+        // UNSAFETY: If the atomic boolean is set to true, we have safely initialized the pointed inside the callback
+        if f.0.load(Ordering::Acquire) {
+            unsafe { output_storage.assume_init() }
+        } else {
+            panic!("Spawned operation panic!ed and did not complete");
+        }
     }
 }
 
@@ -139,11 +155,14 @@ macro_rules! make_spawner {
 
 #[cfg(test)]
 mod test {
+    use futures::FutureExt;
+
     use crate::Shared;
 
     use super::*;
 
     #[allow(unused)]
+    #[allow(unconditional_recursion)]
     fn ensure_blocking_future<R, B: BlockingFutureReturn<R>, F: BlockingFuture<B, R>>() {
         // Rename this type because it's so long
         type Empty = BlockingFutureReturnNewType<()>;
@@ -176,6 +195,19 @@ mod test {
         let spawner = make_spawner!(tokio::task::spawn_blocking);
         let out = spawner.spawn_blocking_map(1, |input| *input + 1).await;
         assert_eq!(2, out);
+    }
+
+    #[tokio::test]
+    async fn test_blocking_panic() {
+        let spawner = make_spawner!(tokio::task::spawn_blocking);
+        let out = spawner
+            .spawn_blocking_map(1, |input| {
+                panic!("Fail!");
+                1
+            })
+            .catch_unwind()
+            .await;
+        assert!(out.is_err());
     }
 
     #[tokio::test]

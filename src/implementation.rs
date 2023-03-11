@@ -60,6 +60,11 @@ pub enum SharedImpl<T: ?Sized> {
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
 }
 
+// UNSAFETY: The construction and projection of SharedImpl requires Send + Sync, so we can guarantee that
+// all instances of SharedMutImpl are Send + Sync.
+unsafe impl<T: ?Sized> Send for SharedImpl<T> {}
+unsafe impl<T: ?Sized> Sync for SharedImpl<T> {}
+
 impl<T: ?Sized + Debug> Debug for SharedImpl<T> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
