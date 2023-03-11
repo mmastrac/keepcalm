@@ -95,7 +95,7 @@ impl<T: ?Sized> Shared<T> {
 
 impl<T: Send> Shared<T> {
     /// The [`Shared::new`] function requires a type that is both `Send + Sync`. If this is not possible, you may call
-    /// [`Shared::new_unsync`] to create a [`Shared`] implementation that uses a [`Mutex`].
+    /// [`Shared::new_unsync`] to create a [`Shared`] implementation that uses a [`std::sync::Mutex`].
     ///
     /// This will fail to compile:
     ///
