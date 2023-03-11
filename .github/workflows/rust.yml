@@ -29,4 +29,4 @@ jobs:
     - name: Run docs
       run: cargo doc --all-features --verbose
     - name: Run Miri
-      run: MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --all-features
+      run: rustup component add miri && MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --all-features
