@@ -8,7 +8,9 @@ const FUTURE_BUF_SIZE: usize = 32;
 #[repr(align(8))]
 pub struct ErasedFuture<T: 'static> {
     buffer: [u8; FUTURE_BUF_SIZE],
-    pointee_fn: fn(*mut [u8; FUTURE_BUF_SIZE]) -> *mut dyn Future<Output = T>,
+    map_fn: *const fn(),
+    poll_fn: fn(&mut ErasedFuture<T>, &mut std::task::Context<'_>) -> std::task::Poll<T>,
+    pointee_fn: fn(*mut [u8; FUTURE_BUF_SIZE]) -> *mut (dyn Future<Output = T> + Unpin),
 }
 
 trait ErasedFutureNew<F: Future<Output = T> + Unpin + 'static, T> {
@@ -22,12 +24,8 @@ impl<T> ErasedFuture<T> {
         <Self as ErasedFutureNew<F, T>>::new(f)
     }
 
-    fn get_ptr(&mut self) -> *mut (dyn Future<Output = T>) {
+    fn get_ptr(&mut self) -> *mut (dyn Future<Output = T> + Unpin) {
         (self.pointee_fn)(&mut self.buffer)
-    }
-
-    fn get_mut_inner(&mut self) -> Pin<&mut dyn Future<Output = T>> {
-        unsafe { Pin::new_unchecked(self.get_ptr().as_mut().unwrap()) }
     }
 }
 
@@ -58,7 +56,12 @@ impl<F: Future<Output = T> + Unpin + 'static, T> ErasedFutureNew<F, T> for Erase
             (*init_ptr).buffer[std::mem::size_of::<F>()..FUTURE_BUF_SIZE].fill(0);
 
             // Create a function that makes fat pointers from thin ones, with knowledge of the original type F
-            (*init_ptr).pointee_fn = |ptr| ptr as *mut F as *mut (dyn Future<Output = T>);
+            (*init_ptr).pointee_fn = |ptr| ptr as *mut F as *mut (dyn Future<Output = T> + Unpin);
+
+            (*init_ptr).poll_fn = |this: &mut ErasedFuture<T>, cx| {
+                let f = this.get_ptr();
+                Pin::new(f.as_mut().unwrap()).poll(cx)
+            };
 
             erased_future.assume_init()
         }
@@ -78,7 +81,7 @@ impl<T> Future for ErasedFuture<T> {
         mut self: Pin<&mut Self>,
         cx: &mut std::task::Context<'_>,
     ) -> std::task::Poll<Self::Output> {
-        self.deref_mut().get_mut_inner().poll(cx)
+        (self.deref_mut().poll_fn)(self.deref_mut(), cx)
     }
 }
 
