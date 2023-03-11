@@ -203,15 +203,17 @@ method (or equivalent). Create a [`Spawner`] using `make_spawner` and pass that 
 ```rust
 # use keepcalm::*;
 # #[cfg(feature="global_experimental")]
-async fn get_locked_value(spawner: Spawner, shared: Shared<usize>) -> usize {
-    *shared.read_async(spawner).await
+static SPAWNER: Spawner = make_spawner!(tokio::task::spawn_blocking);
+
+# #[cfg(feature="global_experimental")]
+async fn get_locked_value(shared: Shared<usize>) -> usize {
+    *shared.read_async(&SPAWNER).await
 }
 
 # #[cfg(feature="global_experimental")]
 {
-    let spawner = make_spawner!(tokio::task::spawn_blocking);
     let shared = Shared::new(1);
-    get_locked_value(spawner, shared);
+    get_locked_value(shared);
 }
 ```
 

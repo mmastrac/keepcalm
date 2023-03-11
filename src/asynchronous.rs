@@ -1,7 +1,6 @@
 use std::{
     future::Future,
     mem::MaybeUninit,
-    panic::{RefUnwindSafe, UnwindSafe},
     sync::atomic::{AtomicBool, AtomicPtr, Ordering},
 };
 
@@ -65,40 +64,25 @@ async fn spawn_blocking<
 
 #[allow(clippy::type_complexity)]
 pub struct Spawner {
-    spawner: Box<
-        dyn (Fn(
-                AtomicPtr<()>,
-                AtomicPtr<()>,
-                AtomicPtr<()>,
-                fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
-            ) -> ErasedFuture<()>)
-            + UnwindSafe
-            + RefUnwindSafe
-            + Send
-            + Sync,
-    >,
+    spawner: fn(
+        AtomicPtr<()>,
+        AtomicPtr<()>,
+        AtomicPtr<()>,
+        fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
+    ) -> ErasedFuture<()>,
 }
 
 impl Spawner {
     #[doc(hidden)]
-    pub fn __new<
-        F: (Fn(
-                AtomicPtr<()>,
-                AtomicPtr<()>,
-                AtomicPtr<()>,
-                fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
-            ) -> ErasedFuture<()>)
-            + UnwindSafe
-            + RefUnwindSafe
-            + Send
-            + Sync
-            + 'static,
-    >(
-        f: F,
+    pub const fn __new(
+        f: fn(
+            AtomicPtr<()>,
+            AtomicPtr<()>,
+            AtomicPtr<()>,
+            fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
+        ) -> ErasedFuture<()>,
     ) -> Self {
-        Self {
-            spawner: Box::new(f),
-        }
+        Self { spawner: f }
     }
 
     pub(crate) async fn spawn_blocking_map<A: Send, B: Send, F: FnOnce(&mut A) -> B>(
@@ -154,7 +138,7 @@ const_assert!(
     std::mem::size_of::<Shared<()>>() == std::mem::size_of::<Shared<&(dyn std::any::Any)>>()
 );
 
-/// Turns a `spawn_blocking` function like `tokio::task::spawn_blocking` `smol::unblock`, or 
+/// Turns a `spawn_blocking` function like `tokio::task::spawn_blocking` `smol::unblock`, or
 /// `async_std::task::spawn_blocking` into a type-erased object that can be used without knowledge of the runtime.
 #[macro_export]
 macro_rules! make_spawner {
@@ -178,11 +162,9 @@ macro_rules! make_spawner {
 
 #[cfg(test)]
 mod test {
-    use futures::FutureExt;
-
-    use crate::Shared;
-
     use super::*;
+    use crate::Shared;
+    use futures::FutureExt;
 
     #[allow(unused)]
     #[allow(unconditional_recursion)]
