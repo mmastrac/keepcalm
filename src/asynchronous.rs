@@ -1,10 +1,12 @@
 use core::panic;
-use std::future::Future;
+use std::{future::Future, mem::MaybeUninit, sync::atomic::AtomicPtr};
+
+use crate::{erasedfuture::ErasedFuture, locks::SharedReadLockOwned, Shared};
 
 trait BlockingFuture<B: BlockingFutureReturn<R>, R>: Future<Output = B> {}
 
 trait BlockingFutureReturn<R> {
-    fn map(self) -> R;
+    fn map_return(self) -> R;
 }
 
 trait BlockingFutureFn<R: Send + 'static>: Send + 'static {}
@@ -19,13 +21,13 @@ impl<T: Send + 'static> From<T> for BlockingFutureReturnNewType<T> {
 }
 
 impl<T: Send + 'static> BlockingFutureReturn<T> for BlockingFutureReturnNewType<T> {
-    fn map(self) -> T {
+    fn map_return(self) -> T {
         self.0
     }
 }
 
 impl<T: Send + 'static, E> BlockingFutureReturn<T> for Result<BlockingFutureReturnNewType<T>, E> {
-    fn map(self) -> T {
+    fn map_return(self) -> T {
         match self {
             Ok(t) => t.0,
             Err(_) => panic!("Panic!"),
@@ -42,6 +44,20 @@ impl<F: FnOnce() -> BlockingFutureReturnNewType<R> + Send + 'static, R: Send + '
 
 /// Generic, `async` spawn_blocking implementation that erases the underlying future type of the `spawn_blocking` method
 /// that is passed to it.
+async fn spawn_blocking_lock<
+    T: Send + Sync + 'static,
+    B: BlockingFutureReturn<T>,
+    F: BlockingFuture<B, T>,
+>(
+    shared: Shared<T>,
+    f: fn(fn(Shared<T>) -> BlockingFutureReturnNewType<SharedReadLockOwned<T>>) -> F,
+) -> T {
+    let res = f(|shared| shared.read_owned().into()).await;
+    res.map_return()
+}
+
+/// Generic, `async` spawn_blocking implementation that erases the underlying future type of the `spawn_blocking` method
+/// that is passed to it.
 async fn spawn_blocking<
     T: Send + 'static,
     FN: FnOnce() -> BlockingFutureReturnNewType<T>,
@@ -52,12 +68,91 @@ async fn spawn_blocking<
     f2: FN,
 ) -> T {
     let res = f(f2).await;
-    res.map()
+    res.map_return()
+}
+
+const BUF_SIZE: usize = 128;
+
+struct Spawner {
+    spawner: Box<
+        dyn Fn(
+            AtomicPtr<()>,
+            AtomicPtr<()>,
+            AtomicPtr<()>,
+            fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
+        ) -> ErasedFuture<()>,
+    >,
+}
+
+impl Spawner {
+    pub(crate) async fn spawn_blocking_map<A, B, F: FnOnce(&mut A) -> B>(
+        &self,
+        mut a: A,
+        mut f: F,
+    ) -> B {
+        let input = AtomicPtr::new(&mut a as *mut A as *mut ());
+        let mut output_storage = MaybeUninit::<B>::uninit();
+        let output = AtomicPtr::new(output_storage.as_mut_ptr() as *mut ());
+        let mut f = Some(f);
+        let context = AtomicPtr::new(&mut f as *mut Option<F> as *mut ());
+        (self.spawner)(context, input, output, |context, input, output| {
+            let input = input.into_inner() as *mut A;
+            let output = output.into_inner() as *mut B;
+            let f = context.into_inner() as *mut Option<F>;
+
+            unsafe {
+                std::ptr::write(
+                    output,
+                    (f.as_mut().unwrap().take().unwrap())(input.as_mut().unwrap()),
+                );
+            }
+        })
+        .await;
+        unsafe { output_storage.assume_init() }
+    }
+}
+
+macro_rules! const_assert {
+    ($x:expr $(,)?) => {
+        #[allow(unknown_lints, eq_op)]
+        const _: [(); 0 - !{
+            const ASSERT: bool = $x;
+            ASSERT
+        } as usize] = [];
+    };
+}
+
+const_assert!(std::mem::size_of::<Shared<()>>() == std::mem::size_of::<Shared<[usize; 1000]>>());
+const_assert!(
+    std::mem::size_of::<Shared<()>>() == std::mem::size_of::<Shared<&(dyn std::any::Any)>>()
+);
+
+macro_rules! make_spawner {
+    ($id:path) => {{
+        use std::sync::atomic::AtomicPtr;
+        let x = |context: AtomicPtr<()>,
+                 input: AtomicPtr<()>,
+                 output: AtomicPtr<()>,
+                 f: fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>)| {
+            use futures::FutureExt;
+
+            $crate::_ErasedFuturePrivate::new(
+                $id(move || {
+                    f(context, input, output);
+                })
+                .map(|_| ()),
+            )
+        };
+
+        Spawner {
+            spawner: Box::new(x),
+        }
+    }};
 }
 
 #[cfg(test)]
 mod test {
-    use crate::{Shared, SharedMut, SharedReadLock};
+    use crate::Shared;
 
     use super::*;
 
@@ -83,6 +178,18 @@ mod test {
         let x = spawn_blocking(tokio::task::spawn_blocking, || ().into()).await;
         let x = spawn_blocking(smol::unblock, || ().into()).await;
         let x = spawn_blocking(async_std::task::spawn_blocking, || ().into()).await;
+    }
+
+    #[tokio::test]
+    async fn test() {
+        let t = ();
+
+        let spawner = make_spawner!(tokio::task::spawn_blocking);
+        let out = spawner.spawn_blocking_map(1, |input| *input + 1).await;
+        assert_eq!(2, out);
+        // let out = (spawner.spawner)([0; BUF_SIZE], |input| {
+        //     input
+        // }).await;
     }
 
     #[tokio::test]

@@ -2,6 +2,8 @@
 
 #[cfg(feature = "async_experimental")]
 mod asynchronous;
+#[cfg(feature = "async_experimental")]
+mod erasedfuture;
 #[cfg(feature = "global_experimental")]
 mod global;
 #[cfg(feature = "global_experimental")]
@@ -14,6 +16,8 @@ mod shared;
 mod sharedmut;
 mod synchronizer;
 
+#[cfg(feature = "async_experimental")]
+pub use erasedfuture::ErasedFuture as _ErasedFuturePrivate;
 #[cfg(feature = "global_experimental")]
 pub use global::SharedGlobal;
 #[cfg(feature = "global_experimental")]
