@@ -75,12 +75,38 @@ pub struct SharedReadLockOwned<T: ?Sized + 'static> {
     pub(crate) container: SharedImpl<T>,
 }
 
+impl<T: ?Sized + 'static> SharedReadLockOwned<T> {
+    /// Unsafely reattach this to a lifetime. You must call this with a lock that is the same
+    /// as the original lock!
+    #[cfg(feature = "async_experimental")]
+    #[allow(clippy::needless_lifetimes)]
+    pub(crate) unsafe fn unsafe_reattach<'a>(
+        self,
+        _to: &'a SharedImpl<T>,
+    ) -> SharedReadLock<'a, T> {
+        std::mem::transmute(self.inner)
+    }
+}
+
 pub struct SharedWriteLockOwned<T: ?Sized + 'static> {
     // Note the ordering of the fields - we want to drop the inner lock before the container!
     pub(crate) inner: SharedWriteLock<'static, T>,
     // Container is never used, but we keep it around for safety/reference purposes
     #[allow(unused)]
     pub(crate) container: SharedImpl<T>,
+}
+
+impl<T: ?Sized + 'static> SharedWriteLockOwned<T> {
+    /// Unsafely reattach this to a lifetime. You must call this with a lock that is the same
+    /// as the original lock!
+    #[cfg(feature = "async_experimental")]
+    #[allow(clippy::needless_lifetimes)]
+    pub(crate) unsafe fn unsafe_reattach<'a>(
+        self,
+        _to: &'a SharedImpl<T>,
+    ) -> SharedWriteLock<'a, T> {
+        std::mem::transmute(self.inner)
+    }
 }
 
 impl<T: ?Sized + 'static> std::ops::Deref for SharedReadLockOwned<T> {

@@ -132,6 +132,7 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn lock_read_owned(&self) -> SharedReadLockOwned<T> {
         let container = self.clone();
         // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
@@ -160,6 +161,7 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    #[allow(unused)]
     pub(crate) fn lock_write_owned(&self) -> SharedWriteLockOwned<T> {
         let container = self.clone();
         // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.

@@ -44,7 +44,9 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
         assert!(std::mem::align_of::<F>() <= std::mem::align_of::<ErasedFuture<T>>());
 
     fn new_mapped(f: F, map: fn(T2) -> T) -> Self {
+        #[allow(clippy::let_unit_value)]
         let _ = <Self as ErasedFutureNew<F, T2, T>>::SIZE_OK;
+        #[allow(clippy::let_unit_value)]
         let _ = <Self as ErasedFutureNew<F, T2, T>>::ALIGN_OK;
 
         // Re-check the assertions at runtime
@@ -63,7 +65,7 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
 
             // Zero out the end of the buffer to avoid uninitialized bytes
             (*init_ptr).buffer[std::mem::size_of::<F>()..FUTURE_BUF_SIZE].fill(0);
-            (*init_ptr).map_fn = std::mem::transmute(map);
+            (*init_ptr).map_fn = map as *const fn();
 
             // Create a function that makes fat pointers from thin ones, with knowledge of the original type F
             (*init_ptr).drop_fn = |this| {
@@ -115,7 +117,7 @@ mod test {
         type Output = usize;
         fn poll(
             self: Pin<&mut Self>,
-            cx: &mut std::task::Context<'_>,
+            _: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
             std::task::Poll::Ready(1)
         }

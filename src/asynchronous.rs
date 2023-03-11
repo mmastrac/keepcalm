@@ -59,6 +59,7 @@ async fn spawn_blocking<
     res.map_return()
 }
 
+#[allow(clippy::type_complexity)]
 pub struct Spawner {
     spawner: Box<
         dyn Fn(
@@ -74,7 +75,7 @@ impl Spawner {
     pub(crate) async fn spawn_blocking_map<A, B, F: FnOnce(&mut A) -> B>(
         &self,
         mut a: A,
-        mut f: F,
+        f: F,
     ) -> B {
         let input = AtomicPtr::new(&mut a as *mut A as *mut ());
         let mut output_storage = MaybeUninit::<B>::uninit();
@@ -98,9 +99,10 @@ impl Spawner {
     }
 }
 
+// TODO: This is borrowed from the static_assertions crate, but should we just use it?
 macro_rules! const_assert {
     ($x:expr $(,)?) => {
-        #[allow(unknown_lints, eq_op)]
+        #[allow(unknown_lints, clippy::eq_op)]
         const _: [(); 0 - !{
             const ASSERT: bool = $x;
             ASSERT
@@ -141,6 +143,7 @@ mod test {
 
     use super::*;
 
+    #[allow(unused)]
     fn ensure_blocking_future<R, B: BlockingFutureReturn<R>, F: BlockingFuture<B, R>>() {
         // Rename this type because it's so long
         type Empty = BlockingFutureReturnNewType<()>;
@@ -149,16 +152,19 @@ mod test {
         ensure_blocking_future::<(), _, async_std::task::JoinHandle<Empty>>();
     }
 
+    #[allow(unused)]
     fn ensure_blocking_fn<R: Send + 'static, F: BlockingFutureFn<R>>(f: F) -> F {
         f
     }
 
+    #[allow(unused)]
     fn ensure_blocking_fn_parent() {
         let f = || BlockingFutureReturnNewType::<()>(());
         let f = ensure_blocking_fn(f);
-        let ret = tokio::task::spawn_blocking(f);
+        let _ = tokio::task::spawn_blocking(f);
     }
 
+    #[allow(unused)]
     async fn ensure_blocking_runners() {
         let x = spawn_blocking(tokio::task::spawn_blocking, || ().into()).await;
         let x = spawn_blocking(smol::unblock, || ().into()).await;
@@ -166,15 +172,10 @@ mod test {
     }
 
     #[tokio::test]
-    async fn test() {
-        let t = ();
-
+    async fn test_blocking() {
         let spawner = make_spawner!(tokio::task::spawn_blocking);
         let out = spawner.spawn_blocking_map(1, |input| *input + 1).await;
         assert_eq!(2, out);
-        // let out = (spawner.spawner)([0; BUF_SIZE], |input| {
-        //     input
-        // }).await;
     }
 
     #[tokio::test]

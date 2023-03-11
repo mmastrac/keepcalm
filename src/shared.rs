@@ -255,15 +255,17 @@ impl<T: ?Sized> Shared<T> {
     }
 
     #[cfg(feature = "async_experimental")]
-    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLockOwned<T>
+    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLock<T>
     where
         T: 'static,
     {
-        spawner
+        let lock = spawner
             .spawn_blocking_map(self.clone(), |lock| lock.read_owned())
-            .await
+            .await;
+        return unsafe { lock.unsafe_reattach(&self.inner) };
     }
 
+    #[allow(unused)]
     pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
         self.inner.lock_read_owned()
     }
