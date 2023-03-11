@@ -254,6 +254,16 @@ impl<T: ?Sized> Shared<T> {
         self.inner.try_lock_read()
     }
 
+    #[cfg(feature = "async_experimental")]
+    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLockOwned<T>
+    where
+        T: 'static,
+    {
+        spawner
+            .spawn_blocking_map(self.clone(), |lock| lock.read_owned())
+            .await
+    }
+
     pub(crate) fn read_owned(&self) -> SharedReadLockOwned<T> {
         self.inner.lock_read_owned()
     }

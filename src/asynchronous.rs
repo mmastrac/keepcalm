@@ -1,7 +1,7 @@
 use core::panic;
 use std::{future::Future, mem::MaybeUninit, sync::atomic::AtomicPtr};
 
-use crate::{erasedfuture::ErasedFuture, locks::SharedReadLockOwned, Shared};
+use crate::{erasedfuture::ErasedFuture, Shared};
 
 trait BlockingFuture<B: BlockingFutureReturn<R>, R>: Future<Output = B> {}
 
@@ -43,21 +43,9 @@ impl<F: FnOnce() -> BlockingFutureReturnNewType<R> + Send + 'static, R: Send + '
 }
 
 /// Generic, `async` spawn_blocking implementation that erases the underlying future type of the `spawn_blocking` method
-/// that is passed to it.
-async fn spawn_blocking_lock<
-    T: Send + Sync + 'static,
-    B: BlockingFutureReturn<T>,
-    F: BlockingFuture<B, T>,
->(
-    shared: Shared<T>,
-    f: fn(fn(Shared<T>) -> BlockingFutureReturnNewType<SharedReadLockOwned<T>>) -> F,
-) -> T {
-    let res = f(|shared| shared.read_owned().into()).await;
-    res.map_return()
-}
-
-/// Generic, `async` spawn_blocking implementation that erases the underlying future type of the `spawn_blocking` method
-/// that is passed to it.
+/// that is passed to it. Note that this will probably only be useful when https://rust-lang.github.io/impl-trait-initiative/explainer/tait.html
+/// stabilizes.
+#[allow(unused)]
 async fn spawn_blocking<
     T: Send + 'static,
     FN: FnOnce() -> BlockingFutureReturnNewType<T>,
@@ -71,9 +59,7 @@ async fn spawn_blocking<
     res.map_return()
 }
 
-const BUF_SIZE: usize = 128;
-
-struct Spawner {
+pub struct Spawner {
     spawner: Box<
         dyn Fn(
             AtomicPtr<()>,
@@ -135,11 +121,11 @@ macro_rules! make_spawner {
                  input: AtomicPtr<()>,
                  output: AtomicPtr<()>,
                  f: fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>)| {
-
             $crate::_ErasedFuturePrivate::new_map(
                 $id(move || {
                     f(context, input, output);
-                }), drop
+                }),
+                drop,
             )
         };
 

@@ -130,11 +130,14 @@ mod test {
     async fn test_erased_future_drops() {
         static DROPPED: AtomicBool = AtomicBool::new(false);
         struct DroppableFuture {
-            panic: bool
+            panic: bool,
         }
         impl Future for DroppableFuture {
             type Output = ();
-            fn poll(self: Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+            fn poll(
+                self: Pin<&mut Self>,
+                _cx: &mut std::task::Context<'_>,
+            ) -> std::task::Poll<Self::Output> {
                 if self.panic {
                     panic!("Expected! Panic! at the poll!");
                 }
@@ -156,7 +159,9 @@ mod test {
         DROPPED.store(false, Ordering::SeqCst);
 
         assert!(!DROPPED.load(Ordering::SeqCst));
-        let res = ErasedFuture::new(DroppableFuture { panic: true }).catch_unwind().await;
+        let res = ErasedFuture::new(DroppableFuture { panic: true })
+            .catch_unwind()
+            .await;
         assert!(res.is_err());
         assert!(DROPPED.load(Ordering::SeqCst));
     }

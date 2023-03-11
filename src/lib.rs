@@ -17,6 +17,8 @@ mod sharedmut;
 mod synchronizer;
 
 #[cfg(feature = "async_experimental")]
+pub use asynchronous::Spawner;
+#[cfg(feature = "async_experimental")]
 pub use erasedfuture::ErasedFuture as _ErasedFuturePrivate;
 #[cfg(feature = "global_experimental")]
 pub use global::SharedGlobal;
