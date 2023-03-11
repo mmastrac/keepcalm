@@ -73,7 +73,9 @@ pub struct Spawner {
                 fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
             ) -> ErasedFuture<()>)
             + UnwindSafe
-            + RefUnwindSafe,
+            + RefUnwindSafe
+            + Send
+            + Sync,
     >,
 }
 
@@ -88,6 +90,8 @@ impl Spawner {
             ) -> ErasedFuture<()>)
             + UnwindSafe
             + RefUnwindSafe
+            + Send
+            + Sync
             + 'static,
     >(
         f: F,
@@ -207,6 +211,14 @@ mod test {
         let x = spawn_blocking(tokio::task::spawn_blocking, || ().into()).await;
         let x = spawn_blocking(smol::unblock, || ().into()).await;
         let x = spawn_blocking(async_std::task::spawn_blocking, || ().into()).await;
+    }
+
+    #[allow(unused)]
+    fn ensure_spawner_send_sync() {
+        fn ensure_send<T: Sync>() {}
+        fn ensure_sync<T: Sync>() {}
+        ensure_send::<Spawner>();
+        ensure_sync::<Spawner>();
     }
 
     #[tokio::test]
