@@ -135,7 +135,7 @@ constructed as a `Mutex`, or may be a read-only view into a [`SharedMut`].
 Note that because of this flexibility, the [`Shared`] object is slightly more complex than a traditional [`std::sync::Arc`], as all accesses
 must be performed through the [`Shared::read`] accessor.
 
-## Globals
+## EXPERIMENTAL: Globals
 
 ***NOTE**: This requires the `--feature global_experimental` flag*
 
@@ -190,6 +190,28 @@ access:
 static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
     SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
+
+## EXPERIMENTAL: Async
+
+***NOTE**: This requires the `--feature async_experimental` flag*
+
+This is extremely experimental and may have soundness and/or performance issues!
+
+The [`Shared`] and [`SharedMut`] types support a `read_async` and `write_async` method that will block using an async runtime's `spawn_blocking`
+method (or equivalent). Create a [`Spawner`] using `make_spawner` and pass that to the appropriate lock method.
+
+```rust
+# use keepcalm::*;
+# #[cfg(feature="global_experimental")]
+async fn get_locked_value(spawner: Spawner, shared: Shared<usize>) -> usize {
+    *shared.read_async(spawner).await
+}
+
+let spawner = make_spawner!(tokio::task::spawn_blocking);
+let shared = Shared::new(1);
+get_locked_value(spawner, shared);
+```
+
 
 ## Projection
 

@@ -78,6 +78,25 @@ pub struct Spawner {
 }
 
 impl Spawner {
+    #[doc(hidden)]
+    pub fn __new<
+        F: (Fn(
+                AtomicPtr<()>,
+                AtomicPtr<()>,
+                AtomicPtr<()>,
+                fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>),
+            ) -> ErasedFuture<()>)
+            + UnwindSafe
+            + RefUnwindSafe
+            + 'static,
+    >(
+        f: F,
+    ) -> Self {
+        Self {
+            spawner: Box::new(f),
+        }
+    }
+
     pub(crate) async fn spawn_blocking_map<A: Send, B: Send, F: FnOnce(&mut A) -> B>(
         &self,
         mut a: A,
@@ -147,9 +166,7 @@ macro_rules! make_spawner {
             )
         };
 
-        Spawner {
-            spawner: Box::new(x),
-        }
+        Spawner::__new(x)
     }};
 }
 
@@ -201,9 +218,12 @@ mod test {
     async fn test_blocking_panic() {
         let spawner = make_spawner!(tokio::task::spawn_blocking);
         let out = spawner
-            .spawn_blocking_map(1, |input| {
+            .spawn_blocking_map(1, |_| {
                 panic!("Fail!");
-                1
+                #[allow(unreachable_code)]
+                {
+                    1
+                }
             })
             .catch_unwind()
             .await;

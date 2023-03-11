@@ -107,27 +107,25 @@ impl<T> Future for ErasedFuture<T> {
 
 #[cfg(test)]
 mod test {
+    use super::*;
+    use futures::FutureExt;
     use std::sync::atomic::{AtomicBool, Ordering};
 
-    use futures::FutureExt;
-
-    use super::*;
-
-    struct MyFuture {
-        x: [u8; 1],
+    struct MyFuture<T: Unpin> {
+        x: Option<T>,
     }
 
-    impl Future for MyFuture {
-        type Output = usize;
+    impl<T: Unpin> Future for MyFuture<T> {
+        type Output = T;
         fn poll(
-            self: Pin<&mut Self>,
+            mut self: Pin<&mut Self>,
             _: &mut std::task::Context<'_>,
         ) -> std::task::Poll<Self::Output> {
-            std::task::Poll::Ready(1)
+            std::task::Poll::Ready(self.deref_mut().x.take().unwrap())
         }
     }
 
-    impl Drop for MyFuture {
+    impl<T: Unpin> Drop for MyFuture<T> {
         fn drop(&mut self) {}
     }
 
@@ -172,14 +170,22 @@ mod test {
         assert!(DROPPED.load(Ordering::SeqCst));
     }
 
+    /// Erase a small future.
     #[tokio::test]
     async fn test_erase_future() {
-        let outside = [1; 1];
-        ErasedFuture::new(MyFuture { x: outside }).await;
-        let outside = [1_usize; 100];
-        println!(
-            "{:?}",
-            ErasedFuture::new(tokio::task::spawn_blocking(move || outside)).await
+        assert_eq!(
+            ErasedFuture::new(MyFuture {
+                x: Some([1_usize; 1])
+            })
+            .await,
+            [1_usize; 1]
         );
+    }
+
+    /// Erase a large future.
+    #[tokio::test]
+    async fn test_erase_large_future() {
+        let outside = [1_usize; 100];
+        _ = ErasedFuture::new(tokio::task::spawn_blocking(move || outside)).await;
     }
 }
