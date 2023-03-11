@@ -250,7 +250,7 @@ impl<T: ?Sized> Shared<T> {
     }
 
     #[cfg(feature = "async_experimental")]
-    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLock<T>
+    pub async fn read_async(&self, spawner: &crate::Spawner) -> SharedReadLock<T>
     where
         T: 'static,
     {

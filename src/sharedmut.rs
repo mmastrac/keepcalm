@@ -384,7 +384,7 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     #[cfg(feature = "async_experimental")]
-    pub async fn read_async(&self, spawner: crate::Spawner) -> SharedReadLock<T>
+    pub async fn read_async(&self, spawner: &crate::Spawner) -> SharedReadLock<T>
     where
         T: 'static,
     {
@@ -398,7 +398,7 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     #[cfg(feature = "async_experimental")]
-    pub async fn write_async(&self, spawner: crate::Spawner) -> SharedWriteLock<T>
+    pub async fn write_async(&self, spawner: &crate::Spawner) -> SharedWriteLock<T>
     where
         T: 'static,
     {
