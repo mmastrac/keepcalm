@@ -7,36 +7,46 @@ const FUTURE_BUF_SIZE: usize = 32;
 /// Erases a future of up to 32 bytes, with an alignment less than or equal to 8 bytes.
 #[repr(align(8))]
 pub struct ErasedFuture<T: 'static> {
+    /// The buffer in which we store the representation of the future. The underlying future must be [`Unpin`] as
+    /// [`ErasedFuture`] is marked [`Unpin`].
     buffer: [u8; FUTURE_BUF_SIZE],
+
+    /// A mapping function, never null.
     map_fn: *const fn(),
+
+    /// A polling function that knows the underlying type of the future.
     poll_fn: fn(&mut ErasedFuture<T>, &mut std::task::Context<'_>) -> std::task::Poll<T>,
-    pointee_fn: fn(*mut [u8; FUTURE_BUF_SIZE]) -> *mut (dyn Future<Output = T> + Unpin),
+
+    /// A drop function.
+    drop_fn: fn(&mut ErasedFuture<T>),
 }
 
-trait ErasedFutureNew<F: Future<Output = T> + Unpin + 'static, T> {
+trait ErasedFutureNew<F: Future<Output = T2> + Unpin + 'static, T2, T> {
     const SIZE_OK: ();
     const ALIGN_OK: ();
-    fn new(f: F) -> ErasedFuture<T>;
+    fn new_mapped(f: F, map: fn(T2) -> T) -> Self;
 }
 
 impl<T> ErasedFuture<T> {
     pub fn new<F: Future<Output = T> + Unpin + 'static>(f: F) -> Self {
-        <Self as ErasedFutureNew<F, T>>::new(f)
+        <Self as ErasedFutureNew<F, T, T>>::new_mapped(f, std::convert::identity)
     }
 
-    fn get_ptr(&mut self) -> *mut (dyn Future<Output = T> + Unpin) {
-        (self.pointee_fn)(&mut self.buffer)
+    pub fn new_map<T2, F: Future<Output = T2> + Unpin + 'static>(f: F, map: fn(T2) -> T) -> Self {
+        <Self as ErasedFutureNew<F, T2, T>>::new_mapped(f, map)
     }
 }
 
-impl<F: Future<Output = T> + Unpin + 'static, T> ErasedFutureNew<F, T> for ErasedFuture<T> {
+impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
+    for ErasedFuture<T>
+{
     const SIZE_OK: () = assert!(std::mem::size_of::<F>() <= FUTURE_BUF_SIZE);
     const ALIGN_OK: () =
         assert!(std::mem::align_of::<F>() <= std::mem::align_of::<ErasedFuture<T>>());
 
-    fn new(f: F) -> Self {
-        let _ = <Self as ErasedFutureNew<F, T>>::SIZE_OK;
-        let _ = <Self as ErasedFutureNew<F, T>>::ALIGN_OK;
+    fn new_mapped(f: F, map: fn(T2) -> T) -> Self {
+        let _ = <Self as ErasedFutureNew<F, T2, T>>::SIZE_OK;
+        let _ = <Self as ErasedFutureNew<F, T2, T>>::ALIGN_OK;
 
         // Re-check the assertions at runtime
         assert!(std::mem::size_of::<F>() <= FUTURE_BUF_SIZE);
@@ -54,13 +64,18 @@ impl<F: Future<Output = T> + Unpin + 'static, T> ErasedFutureNew<F, T> for Erase
 
             // Zero out the end of the buffer to avoid uninitialized bytes
             (*init_ptr).buffer[std::mem::size_of::<F>()..FUTURE_BUF_SIZE].fill(0);
+            (*init_ptr).map_fn = std::mem::transmute(map);
 
             // Create a function that makes fat pointers from thin ones, with knowledge of the original type F
-            (*init_ptr).pointee_fn = |ptr| ptr as *mut F as *mut (dyn Future<Output = T> + Unpin);
+            (*init_ptr).drop_fn = |this| {
+                let ptr = this.buffer.as_mut_ptr() as *mut F;
+                std::ptr::drop_in_place(ptr)
+            };
 
-            (*init_ptr).poll_fn = |this: &mut ErasedFuture<T>, cx| {
-                let f = this.get_ptr();
-                Pin::new(f.as_mut().unwrap()).poll(cx)
+            (*init_ptr).poll_fn = |this, cx| {
+                let f = this.buffer.as_mut_ptr() as *mut F;
+                let map: fn(T2) -> T = std::mem::transmute(this.map_fn);
+                Pin::new(f.as_mut().unwrap()).poll(cx).map(map)
             };
 
             erased_future.assume_init()
@@ -70,7 +85,7 @@ impl<F: Future<Output = T> + Unpin + 'static, T> ErasedFutureNew<F, T> for Erase
 
 impl<T> Drop for ErasedFuture<T> {
     fn drop(&mut self) {
-        unsafe { std::ptr::drop_in_place(self.get_ptr()) }
+        (self.drop_fn)(self)
     }
 }
 
@@ -87,6 +102,10 @@ impl<T> Future for ErasedFuture<T> {
 
 #[cfg(test)]
 mod test {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use futures::FutureExt;
+
     use super::*;
 
     struct MyFuture {
@@ -105,6 +124,42 @@ mod test {
 
     impl Drop for MyFuture {
         fn drop(&mut self) {}
+    }
+
+    /// Ensure that the erased future is dropped once and only once, even if the future panics.
+    #[tokio::test]
+    async fn test_erased_future_drops() {
+        static DROPPED: AtomicBool = AtomicBool::new(false);
+        struct DroppableFuture {
+            panic: bool
+        }
+        impl Future for DroppableFuture {
+            type Output = ();
+            fn poll(self: Pin<&mut Self>, _cx: &mut std::task::Context<'_>) -> std::task::Poll<Self::Output> {
+                if self.panic {
+                    panic!("Expected! Panic! at the poll!");
+                }
+                std::task::Poll::Ready(())
+            }
+        }
+        impl Drop for DroppableFuture {
+            fn drop(&mut self) {
+                if DROPPED.load(Ordering::SeqCst) {
+                    panic!("**UNEXPECTED** Dropped more than once! (this is bad)");
+                }
+                DROPPED.store(true, Ordering::SeqCst);
+            }
+        }
+
+        assert!(!DROPPED.load(Ordering::SeqCst));
+        ErasedFuture::new(DroppableFuture { panic: false }).await;
+        assert!(DROPPED.load(Ordering::SeqCst));
+        DROPPED.store(false, Ordering::SeqCst);
+
+        assert!(!DROPPED.load(Ordering::SeqCst));
+        let res = ErasedFuture::new(DroppableFuture { panic: true }).catch_unwind().await;
+        assert!(res.is_err());
+        assert!(DROPPED.load(Ordering::SeqCst));
     }
 
     #[tokio::test]
