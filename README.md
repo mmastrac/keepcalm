@@ -207,9 +207,12 @@ async fn get_locked_value(spawner: Spawner, shared: Shared<usize>) -> usize {
     *shared.read_async(spawner).await
 }
 
-let spawner = make_spawner!(tokio::task::spawn_blocking);
-let shared = Shared::new(1);
-get_locked_value(spawner, shared);
+# #[cfg(feature="global_experimental")]
+{
+    let spawner = make_spawner!(tokio::task::spawn_blocking);
+    let shared = Shared::new(1);
+    get_locked_value(spawner, shared);
+}
 ```
 
 

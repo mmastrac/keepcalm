@@ -150,6 +150,8 @@ const_assert!(
     std::mem::size_of::<Shared<()>>() == std::mem::size_of::<Shared<&(dyn std::any::Any)>>()
 );
 
+/// Turns a `spawn_blocking` function like `tokio::task::spawn_blocking` `smol::unblock`, or 
+/// `async_std::task::spawn_blocking` into a type-erased object that can be used without knowledge of the runtime.
 #[macro_export]
 macro_rules! make_spawner {
     ($id:path) => {{
