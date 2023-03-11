@@ -17,6 +17,6 @@ jobs:
     - name: Install nightly toolchain
       run: rustup toolchain add nightly
     - name: Install miri
-      run: rustup component add miri
+      run: rustup component add miri --toolchain nightly
     - name: Run Miri
       run: MIRIFLAGS=-Zmiri-disable-isolation cargo +nightly miri test --all-features
