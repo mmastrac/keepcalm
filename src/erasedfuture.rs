@@ -1,6 +1,5 @@
+use std::future::Future;
 use std::{mem::MaybeUninit, ops::DerefMut, pin::Pin};
-
-use futures::Future;
 
 const FUTURE_BUF_SIZE: usize = 32;
 

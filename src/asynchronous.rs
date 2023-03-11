@@ -127,6 +127,7 @@ const_assert!(
     std::mem::size_of::<Shared<()>>() == std::mem::size_of::<Shared<&(dyn std::any::Any)>>()
 );
 
+#[macro_export]
 macro_rules! make_spawner {
     ($id:path) => {{
         use std::sync::atomic::AtomicPtr;
@@ -134,13 +135,11 @@ macro_rules! make_spawner {
                  input: AtomicPtr<()>,
                  output: AtomicPtr<()>,
                  f: fn(AtomicPtr<()>, AtomicPtr<()>, AtomicPtr<()>)| {
-            use futures::FutureExt;
 
-            $crate::_ErasedFuturePrivate::new(
+            $crate::_ErasedFuturePrivate::new_map(
                 $id(move || {
                     f(context, input, output);
-                })
-                .map(|_| ()),
+                }), drop
             )
         };
 
