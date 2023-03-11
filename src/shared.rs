@@ -254,6 +254,9 @@ impl<T: ?Sized> Shared<T> {
     where
         T: 'static,
     {
+        if let Some(lock) = self.try_read() {
+            return lock;
+        }
         let lock = spawner
             .spawn_blocking_map(self.clone(), |lock| lock.read_owned())
             .await;
