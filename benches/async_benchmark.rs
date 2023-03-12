@@ -43,7 +43,7 @@ async fn acquire_lock_keepcalm_noasync(lock: &Shared<usize>) -> usize {
     *lock.read()
 }
 
-fn criterion_benchmark(c: &mut Criterion) {
+fn async_benchmark(c: &mut Criterion) {
     c.bench_function("tokio mutex", |b| {
         let lock = tokio::sync::Mutex::new(1);
         let runtime = tokio::runtime::Runtime::new().unwrap();
@@ -90,5 +90,17 @@ fn criterion_benchmark(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, criterion_benchmark);
+fn sync_benchmark(c: &mut Criterion) {
+    c.bench_function("parking_lot mutex (raw)", |b| {
+        let lock = parking_lot::const_mutex(1);
+        b.iter(|| lock.lock());
+    });
+
+    c.bench_function("keepcalm mutex (raw)", |b| {
+        let lock = Shared::new(1);
+        b.iter(|| lock.read());
+    });
+}
+
+criterion_group!(benches, async_benchmark, sync_benchmark);
 criterion_main!(benches);

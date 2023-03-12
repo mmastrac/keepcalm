@@ -24,6 +24,24 @@ Advantages of `keepcalm`:
  poison on `panic!`, constructors are available to disable this option entirely.
  * `static` Globally-scoped containers for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
  containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].  ***NOTE**: This requires the `--feature global_experimental` flag*
+ * The same primitives work in both synchronous and `async` contents (caveat: the latter being experimental at this time): you can simply `await` an asynchronous
+ version of the lock using `read_async` and `write_async`.
+ * Minimal performance impact: benchmarks shows approximately the same performance between the raw `parking_lot` primitives/`tokio` async containers and those
+ in `keepcalm`.
+
+## Performance
+
+A rough benchmark shows approximately equivalent performance to both `tokio` and `parking_lot` primitives in `async` and `sync` contexts. While
+`keepcalm` shows performance slightly faster than `parking_lot` in some cases, this is probably measurement noise.
+
+| Benchmark                    | `keepcalm`       | `tokio`       | `parking_lot`      |
+|------------------------------|------------------|---------------|--------------------|
+| Mutex (async, uncontended)   | 23ns             | 49ns          | n/a                |
+| Mutex (async, contented)     | 1.3ms            | 1.3ms         | n/a                |
+| RwLock (async, uncontended)  | 14ns             | 46ns          | n/a                |
+| RwLock (async, contended)    | (untested)       | (untested)    | (untested)         |
+| RwLock (sync)                | 6.8ns            | n/a           | (untested)         |
+| Mutex (sync)                 | 7.3ns            | n/a           | 8.5ns              |
 
 ## Container types
 
