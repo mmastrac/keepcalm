@@ -62,7 +62,7 @@ pub enum SharedImpl<T: ?Sized> {
 }
 
 // UNSAFETY: The construction and projection of SharedImpl requires Send + Sync, so we can guarantee that
-// all instances of SharedMutImpl are Send + Sync.
+// all instances of SharedImpl are Send + Sync.
 unsafe impl<T: ?Sized> Send for SharedImpl<T> {}
 unsafe impl<T: ?Sized> Sync for SharedImpl<T> {}
 

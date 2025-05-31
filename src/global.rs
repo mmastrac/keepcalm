@@ -28,12 +28,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
     /// Create a new, lazy [`SharedGlobal`] implementation that will be initialized on the first access.
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::Lazy(
-                OnceLock::new(),
-                f,
-                SynchronizerType::Arc,
-                PoisonPolicy::Ignore,
-            ),
+            inner: SharedGlobalImpl::lazy(f, SynchronizerType::Arc, PoisonPolicy::Ignore),
             projection: OnceLock::new(),
         }
     }
@@ -71,12 +66,7 @@ impl<T: Send> SharedGlobal<T> {
     /// [`SharedGlobal::new_lazy`] to create a [`SharedGlobal`] implementation that uses a [`Mutex`].
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::Lazy(
-                OnceLock::new(),
-                f,
-                SynchronizerType::Mutex,
-                PoisonPolicy::Panic,
-            ),
+            inner: SharedGlobalImpl::lazy(f, SynchronizerType::Mutex, PoisonPolicy::Panic),
             projection: OnceLock::new(),
         }
     }
