@@ -1,6 +1,7 @@
-use std::sync::Arc;
-
-use once_cell::sync::OnceCell;
+use std::{
+    cell::OnceCell,
+    sync::{Arc, OnceLock},
+};
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedMutProjection},
@@ -12,7 +13,7 @@ use crate::{
 /// get a [`SharedMut`].
 pub struct SharedGlobalMut<T: Send> {
     inner: SharedGlobalImpl<T>,
-    projection: OnceCell<Arc<dyn SharedMutProjection<T>>>,
+    projection: OnceLock<Arc<dyn SharedMutProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobalMut<T> {
@@ -24,7 +25,7 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
                 SynchronizerType::RwLock,
                 t,
             )),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 
@@ -37,7 +38,7 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
                 SynchronizerType::RwLock,
                 PoisonPolicy::Panic,
             ),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 }
@@ -80,7 +81,7 @@ impl<T: Send> SharedGlobalMut<T> {
                 SynchronizerType::Mutex,
                 PoisonPolicy::Panic,
             ),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 
@@ -97,7 +98,7 @@ impl<T: Send> SharedGlobalMut<T> {
                 SynchronizerType::Mutex,
                 t,
             )),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 

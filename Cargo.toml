@@ -6,11 +6,12 @@ description = "Simple shared types for multi-threaded programs"
 license = "Apache-2.0 OR MIT"
 readme = "README.md"
 repository = "https://github.com/mmastrac/keepcalm"
+# Needs OnceCell/OnceLock
+rust-version = "1.70"
 
 [dependencies]
 serde = { version = "1", optional = true }
-parking_lot = { version = "0.12.1", features = ["send_guard"] }
-once_cell = "1"
+parking_lot = { version = "0.12.4", features = ["send_guard"] }
 
 [dev-dependencies]
 paste = "1"
@@ -22,7 +23,6 @@ criterion = { version = "0.4", features = ["html_reports", "async_tokio"] }
 
 [features]
 serde = ["dep:serde"]
-global_experimental = []
 async_experimental = []
 
 [[bench]]

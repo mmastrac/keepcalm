@@ -1,12 +1,10 @@
-use once_cell::sync::OnceCell;
-
 use crate::{
     locks::*,
     synchronizer::{
         SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
     },
 };
-use std::{fmt::Debug, sync::Arc};
+use std::{cell::OnceCell, fmt::Debug, sync::Arc};
 
 /// Specifies the underlying mutable synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]

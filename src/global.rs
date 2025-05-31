@@ -1,6 +1,7 @@
-use std::sync::Arc;
-
-use once_cell::sync::OnceCell;
+use std::{
+    cell::OnceCell,
+    sync::{Arc, OnceLock},
+};
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedProjection},
@@ -11,7 +12,7 @@ use crate::{
 /// A global version of [`Shared`]. Use [`SharedGlobal::shared`] to get a [`Shared`] to access the contents.
 pub struct SharedGlobal<T: Send> {
     inner: SharedGlobalImpl<T>,
-    projection: OnceCell<Arc<dyn SharedProjection<T>>>,
+    projection: OnceLock<Arc<dyn SharedProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobal<T> {
@@ -23,7 +24,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
                 SynchronizerType::Arc,
                 t,
             )),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 
@@ -36,7 +37,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
                 SynchronizerType::Arc,
                 PoisonPolicy::Ignore,
             ),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 }
@@ -79,7 +80,7 @@ impl<T: Send> SharedGlobal<T> {
                 SynchronizerType::Mutex,
                 PoisonPolicy::Panic,
             ),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 
@@ -96,7 +97,7 @@ impl<T: Send> SharedGlobal<T> {
                 SynchronizerType::Mutex,
                 t,
             )),
-            projection: OnceCell::new(),
+            projection: OnceLock::new(),
         }
     }
 

@@ -23,7 +23,7 @@ Advantages of `keepcalm`:
  * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
  poison on `panic!`, constructors are available to disable this option entirely.
  * `static` Globally-scoped containers for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
- containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].  ***NOTE**: This requires the `--feature global_experimental` flag*
+ containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].
  * The same primitives work in both synchronous and `async` contents (caveat: the latter being experimental at this time): you can simply `await` an asynchronous
  version of the lock using `read_async` and `write_async`.
  * Minimal performance impact: benchmarks shows approximately the same performance between the raw `parking_lot` primitives/`tokio` async containers and those
@@ -155,8 +155,6 @@ must be performed through the [`Shared::read`] accessor.
 
 ## EXPERIMENTAL: Globals
 
-***NOTE**: This requires the `--feature global_experimental` flag*
-
 While `static` globals may often be an anti-pattern in Rust, this library also offers easily-to-use alternatives that are compatible with
 the [`Shared`] and [`SharedMut`] types.
 
@@ -164,10 +162,8 @@ Global [`Shared`] references can be created using [`SharedGlobal`]:
 
 ```rust
 # use keepcalm::*;
-# #[cfg(feature="global_experimental")]
 static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
 
-# #[cfg(feature="global_experimental")]
 fn use_global() {
     assert_eq!(GLOBAL.read(), 1);
 
@@ -182,10 +178,8 @@ Similarly, global [`SharedMut`] references can be created using [`SharedGlobalMu
 
 ```rust
 # use keepcalm::*;
-# #[cfg(feature="global_experimental")]
 static GLOBAL: SharedGlobalMut<usize> = SharedGlobalMut::new(1);
 
-# #[cfg(feature="global_experimental")]
 fn use_global() {
     *GLOBAL.write() = 12;
     assert_eq!(GLOBAL.read(), 12);
@@ -204,7 +198,6 @@ access:
 ```rust
 # use keepcalm::*;
 # use std::collections::HashMap;
-# #[cfg(feature="global_experimental")]
 static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
     SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
@@ -218,17 +211,19 @@ This is extremely experimental and may have soundness and/or performance issues!
 The [`Shared`] and [`SharedMut`] types support a `read_async` and `write_async` method that will block using an async runtime's `spawn_blocking`
 method (or equivalent). Create a [`Spawner`] using `make_spawner` and pass that to the appropriate lock method.
 
+Note that this relies on an async runtime to provide a blocking task thread-pool, so this may not be suitable for all use-cases.
+
 ```rust
 # use keepcalm::*;
-# #[cfg(feature="global_experimental")]
+# #[cfg(feature="async_experimental")]
 static SPAWNER: Spawner = make_spawner!(tokio::task::spawn_blocking);
 
-# #[cfg(feature="global_experimental")]
+# #[cfg(feature="async_experimental")]
 async fn get_locked_value(shared: Shared<usize>) -> usize {
     *shared.read_async(&SPAWNER).await
 }
 
-# #[cfg(feature="global_experimental")]
+# #[cfg(feature="async_experimental")]
 {
     let shared = Shared::new(1);
     get_locked_value(shared);

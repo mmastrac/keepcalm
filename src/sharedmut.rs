@@ -378,6 +378,14 @@ impl<T: ?Sized> SharedMut<T> {
         self.inner_impl.try_lock_write()
     }
 
+    /// Atomically set the value of this [`SharedMut`] to a new value.
+    pub fn set(&self, t: T)
+    where
+        T: Sized,
+    {
+        *self.write() = t;
+    }
+
     #[allow(unused)]
     pub(crate) fn write_owned(&self) -> SharedWriteLockOwned<T> {
         self.inner_impl.lock_write_owned()
