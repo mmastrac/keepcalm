@@ -53,7 +53,7 @@ unsafe impl<T: ?Sized> Send for SharedMut<T> {}
 unsafe impl<T: ?Sized> Sync for SharedMut<T> {}
 
 // UNSAFETY: Requires the caller to pass something that's Send + Sync in U to avoid unsafely constructing a SharedMut from a non-Send/non-Sync type.
-fn make_shared_rw_value<U: Send + Sync, T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<T> {
+fn make_shared_rw_value<T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<T> {
     SharedMut { inner_impl }
 }
 
@@ -89,7 +89,7 @@ impl<T: ?Sized> SharedMut<T> {
     where
         Box<T>: Send + Sync + 'static,
     {
-        make_shared_rw_value::<Box<T>, T>(SharedImpl::Box(SynchronizerUnsized::new(
+        make_shared_rw_value::<T>(SharedImpl::Box(SynchronizerUnsized::new(
             LockMetadata::poison_panic(),
             SynchronizerType::RwLock,
             value,
@@ -267,7 +267,7 @@ impl<T: Send + Sync + 'static> SharedMut<T> {
             ImplementationMut::RwLock => SynchronizerType::RwLock,
         };
 
-        make_shared_rw_value::<T, T>(SharedImpl::Value(SynchronizerUnsized::new(
+        make_shared_rw_value::<T>(SharedImpl::Value(SynchronizerUnsized::new(
             LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,
@@ -296,7 +296,7 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
             ImplementationMut::RwLock => SynchronizerType::RwLock,
         };
 
-        make_shared_rw_value::<T, T>(SharedImpl::Value(SynchronizerUnsized::new_cloneable(
+        make_shared_rw_value::<T>(SharedImpl::Value(SynchronizerUnsized::new_cloneable(
             LockMetadata::poison_policy(policy),
             synchronizer_type,
             t,
@@ -384,6 +384,22 @@ impl<T: ?Sized> SharedMut<T> {
         T: Sized,
     {
         *self.write() = t;
+    }
+
+    /// Cast this [`SharedMut`] to a new type.
+    ///
+    /// See [`Castable`] for more information.
+    pub fn cast<U>(&self) -> SharedMut<U>
+    where
+        T: Castable<U> + 'static,
+        U: ?Sized + 'static,
+    {
+        let projector = crate::ProjectorRW {
+            ro: Box::new(()),
+            rw: Box::new(()),
+        };
+        let projectable = Arc::new((self.clone(), projector));
+        make_shared_rw_projection(SharedImpl::Projection(projectable))
     }
 
     #[allow(unused)]
@@ -477,6 +493,18 @@ mod test {
         assert_eq!(shared.read()[0], 1);
         shared.write()[0] += 10;
         assert_eq!(shared.read()[0], 11);
+    }
+
+    #[test]
+    pub fn test_unsized_slice_cast() {
+        let shared: SharedMut<[i32]> = SharedMut::new([1, 2, 3]).cast();
+        assert_eq!(shared.read().as_ref(), [1, 2, 3]);
+    }
+
+    #[test]
+    pub fn test_unsized_rw_cast() {
+        let shared: SharedMut<dyn AsRef<str>> = SharedMut::new("123".to_owned()).cast();
+        assert_eq!(shared.read().as_ref(), "123");
     }
 
     #[test]

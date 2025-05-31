@@ -1,12 +1,9 @@
-use std::{
-    cell::OnceCell,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedMutProjection},
     synchronizer::{SynchronizerSized, SynchronizerType},
-    PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
+    Castable, PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
 };
 
 /// A global version of [`SharedMut`]. Use [`SharedGlobalMut::shared`] to get a [`Shared`] to access the contents, or [`SharedGlobalMut::shared_mut`] to
@@ -32,12 +29,7 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
     /// Create a new, lazy [`SharedGlobalMut`] implementation that will be initialized on the first access.
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::Lazy(
-                OnceCell::new(),
-                f,
-                SynchronizerType::RwLock,
-                PoisonPolicy::Panic,
-            ),
+            inner: SharedGlobalImpl::lazy(f, SynchronizerType::RwLock, PoisonPolicy::Panic),
             projection: OnceLock::new(),
         }
     }
@@ -75,12 +67,7 @@ impl<T: Send> SharedGlobalMut<T> {
     /// [`SharedGlobalMut::new_lazy`] to create a [`SharedGlobalMut`] implementation that uses a [`Mutex`].
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
-            inner: SharedGlobalImpl::Lazy(
-                OnceCell::new(),
-                f,
-                SynchronizerType::Mutex,
-                PoisonPolicy::Panic,
-            ),
+            inner: SharedGlobalImpl::lazy(f, SynchronizerType::Mutex, PoisonPolicy::Panic),
             projection: OnceLock::new(),
         }
     }
@@ -123,13 +110,24 @@ impl<T: Send> SharedGlobalMut<T> {
     }
 
     /// Lock the global [`SharedGlobalMut`] for reading directly.
-    pub fn read(&'static self) -> SharedReadLock<T> {
+    pub fn read(&'static self) -> SharedReadLock<'static, T> {
         self.inner.read()
     }
 
     /// Lock the global [`SharedGlobalMut`] for writing directly.
-    pub fn write(&'static self) -> SharedWriteLock<T> {
+    pub fn write(&'static self) -> SharedWriteLock<'static, T> {
         self.inner.write()
+    }
+
+    /// Cast this [`SharedGlobalMut`] to a new type.
+    ///
+    /// See [`Castable`] for more information.
+    pub fn cast<U>(&'static self) -> SharedMut<U>
+    where
+        T: Castable<U> + 'static,
+        U: ?Sized + 'static,
+    {
+        self.shared_mut().cast()
     }
 }
 
@@ -187,5 +185,26 @@ mod test {
         assert_eq!(shared.read().len(), 4);
 
         assert_eq!(GLOBAL_LAZY.read().len(), 4);
+    }
+
+    #[test]
+    fn test_global_lazy_thread_race() {
+        static GLOBAL: SharedGlobalMut<HashMap<&str, usize>> =
+            SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
+        let shared = GLOBAL.shared();
+        let mut handles = Vec::new();
+        let barrier = Arc::new(std::sync::Barrier::new(100));
+        for _ in 0..100 {
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let shared = GLOBAL.read();
+                assert_eq!(shared.len(), 2);
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+        assert_eq!(shared.read().len(), 2);
     }
 }

@@ -6,7 +6,7 @@ pub trait ProjectR<A: ?Sized, B: ?Sized>: Send + Sync {
 impl<A: ?Sized, B: ?Sized, T> ProjectR<A, B> for T
 where
     Self: Send + Sync,
-    T: Fn(&A) -> &B,
+    T: for<'a> Fn(&'a A) -> &'a B,
 {
     fn project<'a>(&self, a: &'a A) -> &'a B {
         self(a)
@@ -21,7 +21,7 @@ pub trait ProjectW<A: ?Sized, B: ?Sized>: Send + Sync {
 impl<A: ?Sized, B: ?Sized, T> ProjectW<A, B> for T
 where
     Self: Send + Sync,
-    T: Fn(&mut A) -> &mut B,
+    T: for<'a> Fn(&'a mut A) -> &'a mut B,
 {
     fn project_mut<'a>(&self, a: &'a mut A) -> &'a mut B {
         self(a)
@@ -30,8 +30,8 @@ where
 
 /// Stores a read/write projection.
 pub struct ProjectorRW<A: ?Sized, B: ?Sized> {
-    ro: Box<dyn ProjectR<A, B> + Send + Sync>,
-    rw: Box<dyn ProjectW<A, B> + Send + Sync>,
+    pub(crate) ro: Box<dyn ProjectR<A, B> + Send + Sync>,
+    pub(crate) rw: Box<dyn ProjectW<A, B> + Send + Sync>,
 }
 
 impl<A: ?Sized, B: ?Sized> ProjectorRW<A, B> {
@@ -131,6 +131,110 @@ macro_rules! project_cast {
             |$x: &mut $type| $x as &mut $type2,
         )
     }};
+}
+
+/// A trait that allows a type to be cast to another, generically unsized type.
+pub trait Castable<T: 'static>
+where
+    T: ?Sized,
+{
+    fn cast<'a>(&'a self) -> &'a T
+    where
+        Self: 'a;
+    fn cast_mut<'a>(&'a mut self) -> &'a mut T
+    where
+        Self: 'a;
+}
+
+macro_rules! impl_castable_trait {
+    ($trait:path) => {
+        impl<T_> Castable<dyn $trait + 'static> for T_
+        where
+            T_: $trait + 'static,
+        {
+            fn cast<'a>(&'a self) -> &'a (dyn $trait + 'static)
+            where
+                Self: 'a,
+            {
+                self
+            }
+            fn cast_mut<'a>(&'a mut self) -> &'a mut (dyn $trait + 'static)
+            where
+                Self: 'a,
+            {
+                self
+            }
+        }
+    };
+}
+
+// Implement for common std traits
+impl_castable_trait!(std::any::Any);
+impl_castable_trait!(std::fmt::Debug);
+impl_castable_trait!(std::fmt::Display);
+
+macro_rules! impl_castable_ref_trait {
+    ($type:ident, $trait:path) => {
+        impl<T_, $type: 'static> Castable<dyn $trait + 'static> for T_
+        where
+            T_: $trait + 'static,
+            $type: ?Sized,
+        {
+            fn cast<'a>(&'a self) -> &'a (dyn $trait + 'static)
+            where
+                Self: 'a,
+            {
+                self
+            }
+            fn cast_mut<'a>(&'a mut self) -> &'a mut (dyn $trait + 'static)
+            where
+                Self: 'a,
+            {
+                self
+            }
+        }
+    };
+}
+
+// Implement for common std traits involving references
+impl_castable_ref_trait!(T, std::convert::AsRef<T>);
+impl_castable_ref_trait!(T, std::convert::AsMut<T>);
+impl_castable_ref_trait!(T, std::ops::Deref<Target = T>);
+impl_castable_ref_trait!(T, std::ops::DerefMut<Target = T>);
+impl_castable_ref_trait!(T, std::borrow::Borrow<T>);
+impl_castable_ref_trait!(T, std::borrow::BorrowMut<T>);
+
+impl<U: 'static, const N: usize> Castable<[U]> for [U; N] {
+    fn cast<'a>(&'a self) -> &'a [U]
+    where
+        Self: 'a,
+    {
+        self
+    }
+    fn cast_mut<'a>(&'a mut self) -> &'a mut [U]
+    where
+        Self: 'a,
+    {
+        self
+    }
+}
+
+impl<T: ?Sized, U: ?Sized + 'static> ProjectR<T, U> for ()
+where
+    T: Castable<U>,
+{
+    fn project<'a>(&self, t: &'a T) -> &'a U {
+        t.cast()
+    }
+}
+
+impl<T: ?Sized, U: ?Sized + 'static> ProjectW<T, U> for ()
+where
+    T: Castable<U>,
+{
+    fn project_mut<'a>(&self, t: &'a mut T) -> &'a mut U {
+        t.cast_mut()
+    }
 }
 
 #[cfg(test)]

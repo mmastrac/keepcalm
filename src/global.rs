@@ -1,16 +1,13 @@
-use std::{
-    cell::OnceCell,
-    sync::{Arc, OnceLock},
-};
+use std::sync::{Arc, OnceLock};
 
 use crate::{
     implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedProjection},
     synchronizer::{SynchronizerSized, SynchronizerType},
-    PoisonPolicy, Shared, SharedReadLock,
+    Castable, PoisonPolicy, Shared, SharedReadLock,
 };
 
 /// A global version of [`Shared`]. Use [`SharedGlobal::shared`] to get a [`Shared`] to access the contents.
-pub struct SharedGlobal<T: Send> {
+pub struct SharedGlobal<T> {
     inner: SharedGlobalImpl<T>,
     projection: OnceLock<Arc<dyn SharedProjection<T>>>,
 }
@@ -32,7 +29,7 @@ impl<T: Send + Sync> SharedGlobal<T> {
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::Lazy(
-                OnceCell::new(),
+                OnceLock::new(),
                 f,
                 SynchronizerType::Arc,
                 PoisonPolicy::Ignore,
@@ -75,7 +72,7 @@ impl<T: Send> SharedGlobal<T> {
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::Lazy(
-                OnceCell::new(),
+                OnceLock::new(),
                 f,
                 SynchronizerType::Mutex,
                 PoisonPolicy::Panic,
@@ -113,15 +110,26 @@ impl<T: Send> SharedGlobal<T> {
     }
 
     /// Lock the global [`SharedGlobal`] for reading directly.
-    pub fn read(&'static self) -> SharedReadLock<T> {
+    pub fn read(&'static self) -> SharedReadLock<'static, T> {
         self.inner.read()
+    }
+
+    /// Cast this [`SharedGlobal`] to a new type.
+    ///
+    /// See [`Castable`] for more information.
+    pub fn cast<U>(&'static self) -> Shared<U>
+    where
+        T: Castable<U> + 'static,
+        U: ?Sized + 'static,
+    {
+        self.shared().cast()
     }
 }
 
 #[cfg(test)]
 mod test {
     use super::SharedGlobal;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, sync::Arc};
     pub type Unsync = std::cell::Cell<()>;
 
     static GLOBAL: SharedGlobal<usize> = SharedGlobal::new(1);
@@ -146,6 +154,27 @@ mod test {
     #[test]
     fn test_global_lazy() {
         let shared = GLOBAL_LAZY.shared();
+        assert_eq!(shared.read().len(), 2);
+    }
+
+    #[test]
+    fn test_global_lazy_thread_race() {
+        static GLOBAL: SharedGlobal<HashMap<&str, usize>> =
+            SharedGlobal::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
+        let shared = GLOBAL.shared();
+        let mut handles = Vec::new();
+        let barrier = Arc::new(std::sync::Barrier::new(100));
+        for _ in 0..100 {
+            let barrier = barrier.clone();
+            handles.push(std::thread::spawn(move || {
+                barrier.wait();
+                let shared = GLOBAL.read();
+                assert_eq!(shared.len(), 2);
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
         assert_eq!(shared.read().len(), 2);
     }
 

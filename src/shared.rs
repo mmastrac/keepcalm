@@ -2,7 +2,7 @@ use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
 use crate::locks::{SharedReadLock, SharedReadLockInner, SharedReadLockOwned};
 use crate::projection::Projector;
 use crate::synchronizer::{SynchronizerType, SynchronizerUnsized};
-use crate::{PoisonPolicy, SharedMut};
+use crate::{Castable, PoisonPolicy, SharedMut};
 use std::sync::Arc;
 
 /// The default [`Shared`] object is similar to Rust's [`std::sync::Arc`], but adds the ability to project. [`Shared`] objects may also be
@@ -247,6 +247,21 @@ impl<T: ?Sized> Shared<T> {
     /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.
     pub fn try_read(&self) -> Option<SharedReadLock<T>> {
         self.inner.try_lock_read()
+    }
+
+    /// Cast this [`Shared`] to a new type.
+    ///
+    /// See [`Castable`] for more information.
+    pub fn cast<U>(&self) -> Shared<U>
+    where
+        T: Castable<U> + 'static,
+        U: ?Sized + 'static,
+    {
+        let projector = crate::Projector::new(());
+        let projectable = Arc::new((self.clone(), Arc::new(projector)));
+        Shared {
+            inner: SharedImpl::ProjectionRO(projectable),
+        }
     }
 
     #[cfg(feature = "async_experimental")]

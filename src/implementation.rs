@@ -4,7 +4,10 @@ use crate::{
         SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
     },
 };
-use std::{cell::OnceCell, fmt::Debug, sync::Arc};
+use std::{
+    fmt::Debug,
+    sync::{Arc, OnceLock},
+};
 
 /// Specifies the underlying mutable synchronization primitive.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -139,8 +142,11 @@ impl<T: ?Sized> SharedImpl<T> {
     pub(crate) fn lock_read_owned(&self) -> SharedReadLockOwned<T> {
         let container = self.clone();
         // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
-        let inner =
-            unsafe { std::mem::transmute::<_, SharedReadLock<'static, T>>(container.lock_read()) };
+        let inner = unsafe {
+            std::mem::transmute::<SharedReadLock<'_, T>, SharedReadLock<'static, T>>(
+                container.lock_read(),
+            )
+        };
         SharedReadLockOwned { inner, container }
     }
 
@@ -169,17 +175,19 @@ impl<T: ?Sized> SharedImpl<T> {
         let container = self.clone();
         // UNSAFETY: We are keeping the SharedReadLock with the lock it is taken from, allowing us to safely transmute this lifetime to 'static.
         let inner = unsafe {
-            std::mem::transmute::<_, SharedWriteLock<'static, T>>(container.lock_write())
+            std::mem::transmute::<SharedWriteLock<'_, T>, SharedWriteLock<'static, T>>(
+                container.lock_write(),
+            )
         };
         SharedWriteLockOwned { inner, container }
     }
 }
 
-pub enum SharedGlobalImpl<T: Send> {
+pub enum SharedGlobalImpl<T> {
     Value(SynchronizerSized<LockMetadata, T>),
     Box(SynchronizerSized<LockMetadata, Box<T>>),
     Lazy(
-        OnceCell<SynchronizerSized<LockMetadata, T>>,
+        OnceLock<SynchronizerSized<LockMetadata, T>>,
         fn() -> T,
         SynchronizerType,
         PoisonPolicy,
@@ -193,16 +201,28 @@ unsafe impl<T: Send> Sync for SharedGlobalImpl<T> {}
 impl<T: Send> SharedGlobalImpl<T> {}
 
 impl<T: Send> SharedGlobalImpl<T> {
+    pub(crate) const fn lazy(
+        f: fn() -> T,
+        sync_type: SynchronizerType,
+        policy: PoisonPolicy,
+    ) -> Self {
+        Self::Lazy(OnceLock::new(), f, sync_type, policy)
+    }
+
     pub(crate) fn read(&self) -> SharedReadLock<T> {
         match self {
             SharedGlobalImpl::Value(lock) => lock.lock_read().into(),
             SharedGlobalImpl::Box(lock) => lock.lock_read().into(),
-            SharedGlobalImpl::Lazy(lock, init, sync_type, policy) => {
-                let lock = lock.get_or_init(|| {
-                    SynchronizerSized::new(LockMetadata::poison_policy(*policy), *sync_type, init())
-                });
-                lock.lock_read().into()
-            }
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
+                .get_or_init(|| {
+                    SynchronizerSized::new(
+                        LockMetadata::poison_policy(*policy),
+                        *sync_type,
+                        (callback)(),
+                    )
+                })
+                .lock_read()
+                .into(),
         }
     }
 
@@ -210,12 +230,16 @@ impl<T: Send> SharedGlobalImpl<T> {
         match self {
             SharedGlobalImpl::Value(lock) => lock.lock_write().into(),
             SharedGlobalImpl::Box(lock) => lock.lock_write().into(),
-            SharedGlobalImpl::Lazy(lock, init, sync_type, policy) => {
-                let lock = lock.get_or_init(|| {
-                    SynchronizerSized::new(LockMetadata::poison_policy(*policy), *sync_type, init())
-                });
-                lock.lock_write().into()
-            }
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
+                .get_or_init(|| {
+                    SynchronizerSized::new(
+                        LockMetadata::poison_policy(*policy),
+                        *sync_type,
+                        (callback)(),
+                    )
+                })
+                .lock_write()
+                .into(),
         }
     }
 }

@@ -22,6 +22,6 @@ pub use global::SharedGlobal;
 pub use globalmut::SharedGlobalMut;
 pub use implementation::PoisonPolicy;
 pub use locks::{SharedReadLock, SharedWriteLock};
-pub use projection::{Projector, ProjectorRW};
+pub use projection::{Castable, Projector, ProjectorRW};
 pub use shared::Shared;
 pub use sharedmut::SharedMut;

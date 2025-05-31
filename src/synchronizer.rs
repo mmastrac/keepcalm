@@ -45,7 +45,7 @@ pub enum SynchronizerReadLock<'a, M, T: ?Sized> {
 impl<'a, M, T: ?Sized> std::ops::Deref for SynchronizerReadLock<'a, M, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        with_ops!(self: _, x => x.deref())
+        with_ops!(self: _, x => x)
     }
 }
 

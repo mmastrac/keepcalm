@@ -15,19 +15,19 @@ This library simplifies a number of shared-object patterns that are used in mult
 Advantages of `keepcalm`:
 
  * You don't need to decide on your synchronization primitives up-front. Everything is a [`Shared`] or [`SharedMut`], no matter whether it's
- a mutex, read/write lock, read/copy/update primitive, or a read-only shared [`std::sync::Arc`].
+   a mutex, read/write lock, read/copy/update primitive, or a read-only shared [`std::sync::Arc`].
  * Everything is [`project!`]able, which means you can adjust the granularity of your locks at any time without having to refactor the whole
- system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
+   system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
  * Writeable containers can be turned into read-only containers, while still retaining the ability for other code to update the contents.
  * Read and write guards are `Send` thanks to the `parking_lot` crate.
  * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
- poison on `panic!`, constructors are available to disable this option entirely.
+   poison on `panic!`, constructors are available to disable this option entirely.
  * `static` Globally-scoped containers for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
- containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].
+   containers. Mutable global containers can similarly be constructed with [`SharedGlobalMut`].
  * The same primitives work in both synchronous and `async` contents (caveat: the latter being experimental at this time): you can simply `await` an asynchronous
- version of the lock using `read_async` and `write_async`.
+   version of the lock using `read_async` and `write_async`.
  * Minimal performance impact: benchmarks shows approximately the same performance between the raw `parking_lot` primitives/`tokio` async containers and those
- in `keepcalm`.
+   in `keepcalm`.
 
 ## Performance
 
@@ -153,7 +153,7 @@ constructed as a `Mutex`, or may be a read-only view into a [`SharedMut`].
 Note that because of this flexibility, the [`Shared`] object is slightly more complex than a traditional [`std::sync::Arc`], as all accesses
 must be performed through the [`Shared::read`] accessor.
 
-## EXPERIMENTAL: Globals
+## Globals
 
 While `static` globals may often be an anti-pattern in Rust, this library also offers easily-to-use alternatives that are compatible with
 the [`Shared`] and [`SharedMut`] types.
@@ -244,6 +244,11 @@ Casting:
 ```rust
 # use keepcalm::*;
 let shared = SharedMut::new("123".to_string());
+
+// Supported for most built-in traits
+let shared_asref: SharedMut<dyn AsRef<str>> = shared.cast();
+
+// Any trait may be projected using `project_cast!`
 let shared_asref: SharedMut<dyn AsRef<str>> = shared.project(project_cast!(x: String => dyn AsRef<str>));
 ```
 
