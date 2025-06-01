@@ -1,7 +1,9 @@
 use std::sync::{Arc, OnceLock};
 
 use crate::{
-    implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedMutProjection},
+    implementation::{
+        LockMetadata, SharedGlobalImpl, SharedGlobalProjection, SharedImpl, SharedMutProjection,
+    },
     synchronizer::{SynchronizerSized, SynchronizerType},
     Castable, PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
 };
@@ -90,23 +92,13 @@ impl<T: Send> SharedGlobalMut<T> {
     }
 
     /// Create a [`Shared`] reference, backed by this global. Note that the [`Shared`] cannot be unwrapped.
-    pub fn shared(&'static self) -> Shared<T> {
-        SharedImpl::Projection(
-            self.projection
-                .get_or_init(|| Arc::new(&self.inner))
-                .clone(),
-        )
-        .into()
+    pub const fn shared(&'static self) -> Shared<T> {
+        Shared::from_inner(SharedImpl::ProjectionStaticRO(&self.inner))
     }
 
     /// Create a [`SharedMut`] reference, backed by this global. Note that the [`SharedMut`] cannot be unwrapped.
-    pub fn shared_mut(&'static self) -> SharedMut<T> {
-        SharedImpl::Projection(
-            self.projection
-                .get_or_init(|| Arc::new(&self.inner))
-                .clone(),
-        )
-        .into()
+    pub const fn shared_mut(&'static self) -> SharedMut<T> {
+        SharedMut::from_inner(SharedImpl::ProjectionStatic(&self.inner))
     }
 
     /// Lock the global [`SharedGlobalMut`] for reading directly.
@@ -114,20 +106,32 @@ impl<T: Send> SharedGlobalMut<T> {
         self.inner.read()
     }
 
+    /// Try to lock the global [`SharedGlobalMut`] for reading directly.
+    pub fn try_read(&'static self) -> Option<SharedReadLock<'static, T>> {
+        self.inner.try_lock_read()
+    }
+
     /// Lock the global [`SharedGlobalMut`] for writing directly.
     pub fn write(&'static self) -> SharedWriteLock<'static, T> {
         self.inner.write()
     }
 
+    /// Try to lock the global [`SharedGlobalMut`] for writing directly.
+    pub fn try_write(&'static self) -> Option<SharedWriteLock<'static, T>> {
+        self.inner.try_lock_write()
+    }
+
     /// Cast this [`SharedGlobalMut`] to a new type.
     ///
     /// See [`Castable`] for more information.
-    pub fn cast<U>(&'static self) -> SharedMut<U>
+    pub const fn cast<U>(&'static self) -> SharedMut<U>
     where
         T: Castable<U> + 'static,
         U: ?Sized + 'static,
     {
-        self.shared_mut().cast()
+        // We want the vtable from SharedGlobalProjection, not SharedProjection
+        let inner = std::ptr::from_ref(&self.inner).cast::<SharedGlobalProjection<T>>();
+        SharedMut::from_inner(SharedImpl::ProjectionStatic(inner))
     }
 }
 
@@ -206,5 +210,15 @@ mod test {
             handle.join().unwrap();
         }
         assert_eq!(shared.read().len(), 2);
+    }
+
+    #[test]
+    fn test_global_cast() {
+        static GLOBAL: SharedGlobalMut<[i32; 2]> = SharedGlobalMut::new_lazy(|| [1, 2]);
+        let shared = GLOBAL.cast::<[i32]>();
+        assert_eq!(shared.read().len(), 2);
+        assert_eq!(GLOBAL.read().len(), 2);
+        _ = shared.try_read().expect("Should be able to read");
+        _ = shared.try_write().expect("Should be able to write");
     }
 }

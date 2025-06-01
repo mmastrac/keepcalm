@@ -1,11 +1,13 @@
 use crate::{
     locks::*,
+    projection::{ProjectR, ProjectW},
     synchronizer::{
         SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
     },
 };
 use std::{
     fmt::Debug,
+    marker::PhantomData,
     sync::{Arc, OnceLock},
 };
 
@@ -59,6 +61,8 @@ pub enum SharedImpl<T: ?Sized> {
     // Lazy(Arc<(OnceCell<Synchronizer<LockMetadata, T>>, fn() -> T)>),
     Projection(Arc<dyn SharedMutProjection<T> + 'static>),
     ProjectionRO(Arc<dyn SharedProjection<T> + 'static>),
+    ProjectionStatic(*const dyn SharedMutProjection<T>),
+    ProjectionStaticRO(*const dyn SharedProjection<T>),
 }
 
 // UNSAFETY: The construction and projection of SharedImpl requires Send + Sync, so we can guarantee that
@@ -72,8 +76,10 @@ impl<T: ?Sized + Debug> Debug for SharedImpl<T> {
             SharedImpl::Value(lock) => lock.fmt(f),
             SharedImpl::Box(lock) => lock.fmt(f),
             // TODO: We should format the underlying projection
-            SharedImpl::Projection(_x) => f.write_fmt(format_args!("(projection)")),
-            SharedImpl::ProjectionRO(_x) => f.write_fmt(format_args!("(projection)")),
+            SharedImpl::Projection(_)
+            | SharedImpl::ProjectionRO(_)
+            | SharedImpl::ProjectionStatic(_)
+            | SharedImpl::ProjectionStaticRO(_) => f.write_fmt(format_args!("(projection)")),
         }
     }
 }
@@ -85,6 +91,8 @@ impl<T: ?Sized> Clone for SharedImpl<T> {
             SharedImpl::Box(lock) => SharedImpl::Box(lock.clone()),
             SharedImpl::Projection(x) => SharedImpl::Projection(x.clone()),
             SharedImpl::ProjectionRO(x) => SharedImpl::ProjectionRO(x.clone()),
+            SharedImpl::ProjectionStatic(x) => SharedImpl::ProjectionStatic(*x),
+            SharedImpl::ProjectionStaticRO(x) => SharedImpl::ProjectionStaticRO(*x),
         }
     }
 }
@@ -98,6 +106,8 @@ impl<T> SharedImpl<T> {
             SharedImpl::Box(lock) => lock.try_unwrap().map_err(SharedImpl::Box).map(|x| *x),
             SharedImpl::Projection(_) => Err(self),
             SharedImpl::ProjectionRO(_) => Err(self),
+            SharedImpl::ProjectionStatic(_) => Err(self),
+            SharedImpl::ProjectionStaticRO(_) => Err(self),
         }
     }
 }
@@ -125,6 +135,8 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Box(lock) => lock.lock_read().into(),
             SharedImpl::Projection(p) => p.lock_read(),
             SharedImpl::ProjectionRO(p) => p.read(),
+            SharedImpl::ProjectionStatic(p) => unsafe { p.as_ref().unwrap_unchecked() }.lock_read(),
+            SharedImpl::ProjectionStaticRO(p) => unsafe { p.as_ref().unwrap_unchecked() }.read(),
         }
     }
 
@@ -135,6 +147,12 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Box(lock) => lock.try_lock_read().map(|x| x.into()),
             SharedImpl::Projection(p) => p.try_lock_read(),
             SharedImpl::ProjectionRO(p) => p.try_lock_read(),
+            SharedImpl::ProjectionStatic(p) => {
+                unsafe { p.as_ref().unwrap_unchecked() }.try_lock_read()
+            }
+            SharedImpl::ProjectionStaticRO(p) => {
+                unsafe { p.as_ref().unwrap_unchecked() }.try_lock_read()
+            }
         }
     }
 
@@ -157,6 +175,10 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Box(lock) => lock.lock_write().into(),
             SharedImpl::Projection(p) => p.lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
+            SharedImpl::ProjectionStatic(p) => {
+                unsafe { p.as_ref().unwrap_unchecked() }.lock_write()
+            }
+            SharedImpl::ProjectionStaticRO(_) => unreachable!("This should not be possible"),
         }
     }
 
@@ -167,6 +189,10 @@ impl<T: ?Sized> SharedImpl<T> {
             SharedImpl::Box(lock) => lock.try_lock_write().map(|x| x.into()),
             SharedImpl::Projection(p) => p.try_lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
+            SharedImpl::ProjectionStatic(p) => {
+                unsafe { p.as_ref().unwrap_unchecked() }.try_lock_write()
+            }
+            SharedImpl::ProjectionStaticRO(_) => unreachable!("This should not be possible"),
         }
     }
 
@@ -193,6 +219,9 @@ pub enum SharedGlobalImpl<T> {
         PoisonPolicy,
     ),
 }
+
+#[repr(transparent)]
+pub struct SharedGlobalProjection<T>(SharedGlobalImpl<T>);
 
 // UNSAFETY: We cannot construct a SharedGlobalImpl that isn't safe to send across thread boundards, so we force this be to Send + Sync
 unsafe impl<T: Send> Send for SharedGlobalImpl<T> {}
@@ -242,19 +271,114 @@ impl<T: Send> SharedGlobalImpl<T> {
                 .into(),
         }
     }
+
+    pub(crate) fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+        match self {
+            SharedGlobalImpl::Value(lock) => lock.try_lock_read().map(|x| x.into()),
+            SharedGlobalImpl::Box(lock) => lock.try_lock_read().map(|x| x.into()),
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
+                .get_or_init(|| {
+                    SynchronizerSized::new(
+                        LockMetadata::poison_policy(*policy),
+                        *sync_type,
+                        (callback)(),
+                    )
+                })
+                .try_lock_read()
+                .map(|x| x.into()),
+        }
+    }
+
+    pub(crate) fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+        match self {
+            SharedGlobalImpl::Value(lock) => lock.try_lock_write().map(|x| x.into()),
+            SharedGlobalImpl::Box(lock) => lock.try_lock_write().map(|x| x.into()),
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
+                .get_or_init(|| {
+                    SynchronizerSized::new(
+                        LockMetadata::poison_policy(*policy),
+                        *sync_type,
+                        (callback)(),
+                    )
+                })
+                .try_lock_write()
+                .map(|x| x.into()),
+        }
+    }
 }
 
-impl<T: Send> SharedProjection<T> for &SharedGlobalImpl<T> {
+impl<T: Send> SharedProjection<T> for SharedGlobalImpl<T> {
     fn read(&self) -> SharedReadLock<T> {
         (*self).read()
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
-        unimplemented!()
+        (*self).try_lock_read()
     }
 }
 
-impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
+impl<U: ?Sized, T: Send> SharedProjection<U> for SharedGlobalProjection<T>
+where
+    (): ProjectR<T, U>,
+{
+    fn read(&self) -> SharedReadLock<U> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedReadLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        let lock = HiddenLock {
+            lock: self.0.read(),
+            _marker: PhantomData,
+        };
+
+        SharedReadLock {
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
+        }
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedReadLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        let Some(lock) = self.0.try_lock_read() else {
+            return None;
+        };
+
+        let lock = HiddenLock {
+            lock,
+            _marker: PhantomData,
+        };
+
+        Some(SharedReadLock {
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
+        })
+    }
+}
+
+impl<T: Send> SharedMutProjection<T> for SharedGlobalImpl<T> {
     fn lock_read(&self) -> SharedReadLock<T> {
         (*self).read()
     }
@@ -264,11 +388,146 @@ impl<T: Send> SharedMutProjection<T> for &SharedGlobalImpl<T> {
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
-        unimplemented!()
+        (*self).try_lock_read()
     }
 
     fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
-        unimplemented!()
+        (*self).try_lock_write()
+    }
+}
+
+impl<U: ?Sized, T: Send> SharedMutProjection<U> for SharedGlobalProjection<T>
+where
+    (): ProjectR<T, U> + ProjectW<T, U>,
+{
+    fn lock_read(&self) -> SharedReadLock<U> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedReadLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        let lock = HiddenLock {
+            lock: self.0.read(),
+            _marker: PhantomData,
+        };
+
+        SharedReadLock {
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
+        }
+    }
+
+    fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedReadLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        let Some(lock) = self.0.try_lock_read() else {
+            return None;
+        };
+
+        let lock = HiddenLock {
+            lock,
+            _marker: PhantomData,
+        };
+
+        Some(SharedReadLock {
+            inner: SharedReadLockInner::Projection(Box::new(lock)),
+        })
+    }
+
+    fn lock_write(&self) -> SharedWriteLock<U> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedWriteLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::DerefMut for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P> + ProjectW<T, P>,
+        {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                ().project_mut(&mut *self.lock)
+            }
+        }
+
+        let lock = HiddenLock {
+            lock: self.0.write(),
+            _marker: PhantomData,
+        };
+
+        SharedWriteLock {
+            inner: SharedWriteLockInner::Projection(Box::new(lock)),
+        }
+    }
+
+    fn try_lock_write(&self) -> Option<SharedWriteLock<U>> {
+        struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
+            lock: SharedWriteLock<'a, T>,
+            _marker: PhantomData<P>,
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::Deref for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P>,
+        {
+            type Target = P;
+            fn deref(&self) -> &Self::Target {
+                ().project(&*self.lock)
+            }
+        }
+
+        impl<'a, T: ?Sized, P: ?Sized> std::ops::DerefMut for HiddenLock<'a, T, P>
+        where
+            (): ProjectR<T, P> + ProjectW<T, P>,
+        {
+            fn deref_mut(&mut self) -> &mut Self::Target {
+                ().project_mut(&mut *self.lock)
+            }
+        }
+
+        let Some(lock) = self.0.try_lock_write() else {
+            return None;
+        };
+
+        let lock = HiddenLock {
+            lock,
+            _marker: PhantomData,
+        };
+
+        Some(SharedWriteLock {
+            inner: SharedWriteLockInner::Projection(Box::new(lock)),
+        })
     }
 }
 

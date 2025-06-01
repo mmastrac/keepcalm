@@ -91,6 +91,10 @@ impl<T: ?Sized> Shared<T> {
             )),
         }
     }
+
+    pub(crate) const fn from_inner(inner: SharedImpl<T>) -> Self {
+        Self { inner }
+    }
 }
 
 impl<T: Send> Shared<T> {
@@ -286,7 +290,7 @@ impl<T: ?Sized> Shared<T> {
 
 #[cfg(test)]
 mod test {
-    use crate::project_cast;
+    use crate::{project, project_cast};
 
     use super::*;
 

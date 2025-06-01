@@ -1,13 +1,13 @@
 [package]
 name = "keepcalm"
-version = "0.4.0"
+version = "0.4.1"
 edition = "2021"
 description = "Simple shared types for multi-threaded programs"
 license = "Apache-2.0 OR MIT"
 readme = "README.md"
 repository = "https://github.com/mmastrac/keepcalm"
 # Needs OnceCell/OnceLock
-rust-version = "1.70"
+rust-version = "1.76"
 
 [dependencies]
 serde = { version = "1", optional = true }

@@ -1,7 +1,7 @@
-use std::sync::{Arc, OnceLock};
-
 use crate::{
-    implementation::{LockMetadata, SharedGlobalImpl, SharedImpl, SharedProjection},
+    implementation::{
+        LockMetadata, SharedGlobalImpl, SharedGlobalProjection, SharedImpl, SharedProjection,
+    },
     synchronizer::{SynchronizerSized, SynchronizerType},
     Castable, PoisonPolicy, Shared, SharedReadLock,
 };
@@ -9,7 +9,6 @@ use crate::{
 /// A global version of [`Shared`]. Use [`SharedGlobal::shared`] to get a [`Shared`] to access the contents.
 pub struct SharedGlobal<T> {
     inner: SharedGlobalImpl<T>,
-    projection: OnceLock<Arc<dyn SharedProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobal<T> {
@@ -21,7 +20,6 @@ impl<T: Send + Sync> SharedGlobal<T> {
                 SynchronizerType::Arc,
                 t,
             )),
-            projection: OnceLock::new(),
         }
     }
 
@@ -29,7 +27,6 @@ impl<T: Send + Sync> SharedGlobal<T> {
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::lazy(f, SynchronizerType::Arc, PoisonPolicy::Ignore),
-            projection: OnceLock::new(),
         }
     }
 }
@@ -67,7 +64,6 @@ impl<T: Send> SharedGlobal<T> {
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::lazy(f, SynchronizerType::Mutex, PoisonPolicy::Panic),
-            projection: OnceLock::new(),
         }
     }
 
@@ -84,19 +80,13 @@ impl<T: Send> SharedGlobal<T> {
                 SynchronizerType::Mutex,
                 t,
             )),
-            projection: OnceLock::new(),
         }
     }
 
     /// Create a [`Shared`] reference, backed by this global. Note that the [`Shared`] cannot be unwrapped.
-    pub fn shared(&'static self) -> Shared<T> {
-        // This is unnecessarily allocating an Arc each time, but it shouldn't be terribly expensive
-        SharedImpl::ProjectionRO(
-            self.projection
-                .get_or_init(|| Arc::new(&self.inner))
-                .clone(),
-        )
-        .into()
+    pub const fn shared(&'static self) -> Shared<T> {
+        let inner: &'static dyn SharedProjection<T> = &self.inner as _;
+        Shared::from_inner(SharedImpl::ProjectionStaticRO(inner))
     }
 
     /// Lock the global [`SharedGlobal`] for reading directly.
@@ -107,12 +97,14 @@ impl<T: Send> SharedGlobal<T> {
     /// Cast this [`SharedGlobal`] to a new type.
     ///
     /// See [`Castable`] for more information.
-    pub fn cast<U>(&'static self) -> Shared<U>
+    pub const fn cast<U>(&'static self) -> Shared<U>
     where
         T: Castable<U> + 'static,
         U: ?Sized + 'static,
     {
-        self.shared().cast()
+        // We want the vtable from SharedGlobalProjection, not SharedProjection
+        let inner = std::ptr::from_ref(&self.inner).cast::<SharedGlobalProjection<T>>();
+        Shared::from_inner(SharedImpl::ProjectionStaticRO(inner))
     }
 }
 

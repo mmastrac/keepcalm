@@ -62,13 +62,6 @@ fn make_shared_rw_projection<T: ?Sized>(inner_impl: SharedImpl<T>) -> SharedMut<
     SharedMut { inner_impl }
 }
 
-// Use for transmutation from GlobalSharedMut to SharedMut.
-impl<T: ?Sized> From<SharedImpl<T>> for SharedMut<T> {
-    fn from(inner_impl: SharedImpl<T>) -> Self {
-        Self { inner_impl }
-    }
-}
-
 // UNSAFETY: Safe to clone an object that is considered safe.
 impl<T: ?Sized> Clone for SharedMut<T> {
     fn clone(&self) -> Self {
@@ -94,6 +87,10 @@ impl<T: ?Sized> SharedMut<T> {
             SynchronizerType::RwLock,
             value,
         )))
+    }
+
+    pub(crate) const fn from_inner(inner_impl: SharedImpl<T>) -> Self {
+        Self { inner_impl }
     }
 }
 
@@ -478,6 +475,10 @@ mod test {
         let shared3 = shared2.project(projection2);
         *shared3.write() += 10;
         (shared2.write().0) += 100;
+        _ = shared2.try_read().expect("Should be able to read");
+        _ = shared2.try_write().expect("Should be able to write");
+        _ = shared3.try_read().expect("Should be able to read");
+        _ = shared3.try_write().expect("Should be able to write");
 
         assert_eq!(shared.read(), (1, (102, (3, 14))));
     }
@@ -626,5 +627,15 @@ mod test {
         fn serialize<S: serde::Serialize>(_: S) {}
         let shared = SharedMut::new((1, 2, 3));
         serialize(shared);
+    }
+
+    #[test]
+    pub fn test_rcu_and_projection() {
+        let shared = SharedMut::new_rcu((1, 2, 3));
+        let shared2 = shared.project(project!(x: (i32, i32, i32), x.0));
+        assert_eq!(shared2.read(), 1);
+        *shared2.write() = 10;
+        assert_eq!(shared.read(), (10, 2, 3));
+        assert_eq!(shared2.read(), 10);
     }
 }
