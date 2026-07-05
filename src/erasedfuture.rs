@@ -71,7 +71,11 @@ impl<F: Future<Output = T2> + Unpin + 'static, T2, T> ErasedFutureNew<F, T2, T>
             std::mem::forget(f);
 
             // Zero out the end of the buffer to avoid uninitialized bytes
-            (*init_ptr).buffer[std::mem::size_of::<F>()..FUTURE_BUF_SIZE].fill(0);
+            std::ptr::write_bytes(
+                (bufptr as *mut u8).add(std::mem::size_of::<F>()),
+                0,
+                FUTURE_BUF_SIZE - std::mem::size_of::<F>(),
+            );
 
             // Store the map function as a boring () -> () function pointer to erase the type
             (*init_ptr).map_fn = map as *const fn();

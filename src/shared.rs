@@ -1,5 +1,5 @@
 use crate::implementation::{LockMetadata, SharedImpl, SharedProjection};
-use crate::locks::{SharedReadLock, SharedReadLockInner, SharedReadLockOwned};
+use crate::locks::{SharedReadLock, SharedReadLockOwned};
 use crate::projection::Projector;
 use crate::synchronizer::{SynchronizerType, SynchronizerUnsized};
 use crate::{Castable, PoisonPolicy, SharedMut};
@@ -184,9 +184,7 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
             projector: &self.1,
         };
 
-        SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        }
+        SharedReadLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
@@ -209,9 +207,7 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
                 projector: &self.1,
             };
 
-            Some(SharedReadLock {
-                inner: SharedReadLockInner::Projection(Box::new(lock)),
-            })
+            Some(SharedReadLock::from_projection(Box::new(lock)))
         } else {
             None
         }

@@ -7,6 +7,8 @@ mod erasedfuture;
 mod global;
 mod globalmut;
 mod implementation;
+#[cfg(feature = "deadlock_detection")]
+mod lockdep;
 mod locks;
 mod projection;
 mod rcu;

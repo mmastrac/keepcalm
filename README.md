@@ -202,6 +202,42 @@ static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
     SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
 
+## Deadlock detection
+
+***NOTE**: This requires the `--feature deadlock_detection` flag*
+
+With the `deadlock_detection` feature enabled, keepcalm tracks the order in which locks are
+acquired across the whole process (in the style of the Linux kernel's lockdep). If a thread
+is about to acquire a lock in an order that is inverted somewhere else in the program — the
+classic recipe for a deadlock — it `panic!`s immediately with a report that includes a
+backtrace of where the opposite ordering was first observed. Re-acquiring a lock the current
+thread already holds (including through a projection, which shares its root's lock) is also
+reported.
+
+The check happens *before* the acquisition blocks, so a lock-order bug is caught the first
+time the inverted order runs — the threads don't have to actually race into the deadlock:
+
+```rust,no_run
+# use keepcalm::*;
+let a = SharedMut::new(1);
+let b = SharedMut::new(2);
+{
+    let _a = a.write();
+    let _b = b.write(); // records the ordering a -> b
+}
+let _b = b.write();
+let _a = a.write();     // panics: b -> a inverts the recorded order
+```
+
+Because every container funnels through the same erased lock implementation, this works
+uniformly across `RwLock`, `Mutex`, globals and projected containers. Plain `Arc` and RCU
+containers never block while held and are exempt. `try_read`/`try_write` cannot deadlock and
+are never reported, but locks they successfully acquire are tracked as held.
+
+This feature is intended for debug and test builds: every blocking acquisition consults a
+global registry. Enable it in CI (`cargo test --features deadlock_detection`) and leave it
+off in release builds, where it costs nothing.
+
 ## EXPERIMENTAL: Async
 
 ***NOTE**: This requires the `--feature async_experimental` flag*

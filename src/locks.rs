@@ -28,10 +28,29 @@ pub enum SharedReadLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedReadLock<'a, T: ?Sized> {
     pub(crate) inner: SharedReadLockInner<'a, T>,
+    /// Held-lock registration for deadlock detection; `None` for untracked
+    /// (Arc/RCU) synchronizers and for projections (the projected root guard
+    /// carries the registration).
+    #[cfg(feature = "deadlock_detection")]
+    pub(crate) lockdep: Option<crate::lockdep::HeldToken>,
+}
+
+impl<'a, T: ?Sized> SharedReadLock<'a, T> {
+    pub(crate) fn from_projection(inner: Box<dyn std::ops::Deref<Target = T> + 'a>) -> Self {
+        SharedReadLock {
+            inner: SharedReadLockInner::Projection(inner),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep: None,
+        }
+    }
 }
 
 impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
     fn drop(&mut self) {
+        #[cfg(feature = "deadlock_detection")]
+        if let Some(token) = self.lockdep.take() {
+            crate::lockdep::release_held(token);
+        }
         if let SharedReadLockInner::Sync(lock) = &self.inner {
             let metadata = lock.metadata();
             if let Some(poison) = &metadata.poison {
@@ -53,16 +72,24 @@ impl<'a, T: ?Sized> Drop for SharedReadLock<'a, T> {
 
 impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, T>> for SharedReadLock<'a, T> {
     fn from(value: SynchronizerReadLock<'a, LockMetadata, T>) -> Self {
+        #[cfg(feature = "deadlock_detection")]
+        let lockdep = crate::lockdep::read_guard_token(&value);
         SharedReadLock {
             inner: SharedReadLockInner::Sync(value),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep,
         }
     }
 }
 
 impl<'a, T: ?Sized> From<SynchronizerReadLock<'a, LockMetadata, Box<T>>> for SharedReadLock<'a, T> {
     fn from(value: SynchronizerReadLock<'a, LockMetadata, Box<T>>) -> Self {
+        #[cfg(feature = "deadlock_detection")]
+        let lockdep = crate::lockdep::read_guard_token(&value);
         SharedReadLock {
             inner: SharedReadLockInner::SyncBox(value),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep,
         }
     }
 }
@@ -146,12 +173,31 @@ pub enum SharedWriteLockInner<'a, T: ?Sized> {
 //                       and cause Futures to not implement `Send`"]
 pub struct SharedWriteLock<'a, T: ?Sized> {
     pub(crate) inner: SharedWriteLockInner<'a, T>,
+    /// Held-lock registration for deadlock detection; `None` for untracked
+    /// (RCU) synchronizers and for projections (the projected root guard
+    /// carries the registration).
+    #[cfg(feature = "deadlock_detection")]
+    pub(crate) lockdep: Option<crate::lockdep::HeldToken>,
+}
+
+impl<'a, T: ?Sized> SharedWriteLock<'a, T> {
+    pub(crate) fn from_projection(inner: Box<dyn std::ops::DerefMut<Target = T> + 'a>) -> Self {
+        SharedWriteLock {
+            inner: SharedWriteLockInner::Projection(inner),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep: None,
+        }
+    }
 }
 
 impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, T>> for SharedWriteLock<'a, T> {
     fn from(value: SynchronizerWriteLock<'a, LockMetadata, T>) -> Self {
+        #[cfg(feature = "deadlock_detection")]
+        let lockdep = crate::lockdep::write_guard_token(&value);
         SharedWriteLock {
             inner: SharedWriteLockInner::Sync(value),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep,
         }
     }
 }
@@ -160,8 +206,12 @@ impl<'a, T: ?Sized> From<SynchronizerWriteLock<'a, LockMetadata, Box<T>>>
     for SharedWriteLock<'a, T>
 {
     fn from(value: SynchronizerWriteLock<'a, LockMetadata, Box<T>>) -> Self {
+        #[cfg(feature = "deadlock_detection")]
+        let lockdep = crate::lockdep::write_guard_token(&value);
         SharedWriteLock {
             inner: SharedWriteLockInner::SyncBox(value),
+            #[cfg(feature = "deadlock_detection")]
+            lockdep,
         }
     }
 }
@@ -203,6 +253,10 @@ impl<'a, T: ?Sized> std::ops::DerefMut for SharedWriteLock<'a, T> {
 
 impl<'a, T: ?Sized> Drop for SharedWriteLock<'a, T> {
     fn drop(&mut self) {
+        #[cfg(feature = "deadlock_detection")]
+        if let Some(token) = self.lockdep.take() {
+            crate::lockdep::release_held(token);
+        }
         if let SharedWriteLockInner::Sync(lock) = &self.inner {
             let metadata = lock.metadata();
             if let Some(poison) = &metadata.poison {

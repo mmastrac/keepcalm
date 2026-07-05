@@ -129,9 +129,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
             projector: &self.1,
         };
 
-        SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        }
+        SharedReadLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
@@ -154,9 +152,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
                 projector: &self.1,
             };
 
-            Some(SharedReadLock {
-                inner: SharedReadLockInner::Projection(Box::new(lock)),
-            })
+            Some(SharedReadLock::from_projection(Box::new(lock)))
         } else {
             None
         }
@@ -186,9 +182,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
             projector: &self.1,
         };
 
-        SharedWriteLock {
-            inner: SharedWriteLockInner::Projection(Box::new(lock)),
-        }
+        SharedWriteLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_write(&self) -> Option<SharedWriteLock<P>> {
@@ -217,9 +211,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
                 projector: &self.1,
             };
 
-            Some(SharedWriteLock {
-                inner: SharedWriteLockInner::Projection(Box::new(lock)),
-            })
+            Some(SharedWriteLock::from_projection(Box::new(lock)))
         } else {
             None
         }
@@ -398,6 +390,18 @@ impl<T: ?Sized> SharedMut<T> {
         let projectable = Arc::new((self.clone(), projector));
         make_shared_rw_projection(SharedImpl::Projection(projectable))
     }
+
+    /// Attempt to unwrap this synchronized object if we are the only holder of its value.
+    ///
+    /// This is the unsized counterpart of [`SharedMut::try_unwrap`]: it only succeeds for
+    /// containers constructed via [`SharedMut::from_box`].
+    pub fn try_unwrap_box(self) -> Result<Box<T>, Self> {
+        match self.inner_impl.try_unwrap_box() {
+            Ok(x) => Ok(x),
+            Err(inner_impl) => Err(Self { inner_impl }),
+        }
+    }
+
 
     #[allow(unused)]
     pub(crate) fn write_owned(&self) -> SharedWriteLockOwned<T> {

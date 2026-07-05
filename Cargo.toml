@@ -1,6 +1,6 @@
 [package]
 name = "keepcalm"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2021"
 description = "Simple shared types for multi-threaded programs"
 license = "Apache-2.0 OR MIT"
@@ -24,6 +24,12 @@ criterion = { version = "0.4", features = ["html_reports", "async_tokio"] }
 [features]
 serde = ["dep:serde"]
 async_experimental = []
+# Runtime lock-order (deadlock) detection. Records the order in which locks are
+# acquired across the whole process and panics -- before blocking -- when an
+# acquisition would create a lock-order cycle, or when a thread re-acquires a
+# lock it already holds. Intended for debug/test builds: every blocking
+# acquisition takes a global detector lock.
+deadlock_detection = []
 
 [[bench]]
 name = "async_benchmark"

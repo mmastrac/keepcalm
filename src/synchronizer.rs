@@ -94,6 +94,19 @@ pub enum SynchronizerSized<M, T> {
 }
 
 impl<M, T> SynchronizerSized<M, T> {
+    #[cfg(feature = "deadlock_detection")]
+    pub fn sync_type(&self) -> SynchronizerType {
+        match self {
+            Self::Arc(_) => SynchronizerType::Arc,
+            Self::ReadCopyUpdate(_) => SynchronizerType::Rcu,
+            Self::RwLock(_) => SynchronizerType::RwLock,
+            Self::Mutex(_) => SynchronizerType::Mutex,
+        }
+    }
+    #[cfg(feature = "deadlock_detection")]
+    pub fn metadata(&self) -> &M {
+        with_ops!(self: x => &x.metadata)
+    }
     pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
         with_ops!(self: x => x.lock_read())
     }
@@ -230,6 +243,15 @@ impl<M, T> SynchronizerUnsized<M, T> {
 }
 
 impl<M, T: ?Sized> SynchronizerUnsized<M, T> {
+    #[cfg(feature = "deadlock_detection")]
+    pub fn sync_type(&self) -> SynchronizerType {
+        match self {
+            Self::Arc(_) => SynchronizerType::Arc,
+            Self::ReadCopyUpdate(_) => SynchronizerType::Rcu,
+            Self::RwLock(_) => SynchronizerType::RwLock,
+            Self::Mutex(_) => SynchronizerType::Mutex,
+        }
+    }
     pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
         with_ops!(self: x => x.lock_read())
     }

@@ -2,7 +2,8 @@ use crate::{
     locks::*,
     projection::{ProjectR, ProjectW},
     synchronizer::{
-        SynchronizerMetadata, SynchronizerSized, SynchronizerType, SynchronizerUnsized,
+        SynchronizerMetadata, SynchronizerReadLock, SynchronizerSized, SynchronizerType,
+        SynchronizerUnsized, SynchronizerWriteLock,
     },
 };
 use std::{
@@ -33,6 +34,10 @@ type Poison = std::sync::atomic::AtomicBool;
 
 pub struct LockMetadata {
     pub poison: Option<Poison>,
+    /// Process-unique identity for lock-order tracking. Shared by all clones
+    /// and projections of the same container.
+    #[cfg(feature = "deadlock_detection")]
+    pub(crate) lock_id: crate::lockdep::LockId,
 }
 
 impl LockMetadata {
@@ -46,9 +51,15 @@ impl LockMetadata {
 
     pub const fn poison_policy(policy: PoisonPolicy) -> Self {
         match policy {
-            PoisonPolicy::Ignore => Self { poison: None },
+            PoisonPolicy::Ignore => Self {
+                poison: None,
+                #[cfg(feature = "deadlock_detection")]
+                lock_id: crate::lockdep::LockId::unassigned(),
+            },
             PoisonPolicy::Panic => Self {
                 poison: Some(Poison::new(false)),
+                #[cfg(feature = "deadlock_detection")]
+                lock_id: crate::lockdep::LockId::unassigned(),
             },
         }
     }
@@ -128,11 +139,33 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
+    pub fn try_unwrap_box(self) -> Result<Box<T>, Self> {
+        self.check_poison();
+        match self {
+            // A `Value` container stores `T` inline; an unsized `T` cannot be
+            // moved out of it, so only `Box` containers can unwrap here.
+            SharedImpl::Value(_) => Err(self),
+            SharedImpl::Box(lock) => lock.try_unwrap().map_err(SharedImpl::Box),
+            SharedImpl::Projection(_) => Err(self),
+            SharedImpl::ProjectionRO(_) => Err(self),
+            SharedImpl::ProjectionStatic(_) => Err(self),
+            SharedImpl::ProjectionStaticRO(_) => Err(self),
+        }
+    }
+
     pub fn lock_read(&self) -> SharedReadLock<T> {
         self.check_poison();
         match &self {
-            SharedImpl::Value(lock) => lock.lock_read().into(),
-            SharedImpl::Box(lock) => lock.lock_read().into(),
+            SharedImpl::Value(lock) => {
+                #[cfg(feature = "deadlock_detection")]
+                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+                lock.lock_read().into()
+            }
+            SharedImpl::Box(lock) => {
+                #[cfg(feature = "deadlock_detection")]
+                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+                lock.lock_read().into()
+            }
             SharedImpl::Projection(p) => p.lock_read(),
             SharedImpl::ProjectionRO(p) => p.read(),
             SharedImpl::ProjectionStatic(p) => unsafe { p.as_ref().unwrap_unchecked() }.lock_read(),
@@ -171,8 +204,16 @@ impl<T: ?Sized> SharedImpl<T> {
     pub fn lock_write(&self) -> SharedWriteLock<T> {
         self.check_poison();
         match &self {
-            SharedImpl::Value(lock) => lock.lock_write().into(),
-            SharedImpl::Box(lock) => lock.lock_write().into(),
+            SharedImpl::Value(lock) => {
+                #[cfg(feature = "deadlock_detection")]
+                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+                lock.lock_write().into()
+            }
+            SharedImpl::Box(lock) => {
+                #[cfg(feature = "deadlock_detection")]
+                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+                lock.lock_write().into()
+            }
             SharedImpl::Projection(p) => p.lock_write(),
             SharedImpl::ProjectionRO(_) => unreachable!("This should not be possible"),
             SharedImpl::ProjectionStatic(p) => {
@@ -239,37 +280,49 @@ impl<T: Send> SharedGlobalImpl<T> {
     }
 
     pub(crate) fn read(&self) -> SharedReadLock<T> {
-        match self {
-            SharedGlobalImpl::Value(lock) => lock.lock_read().into(),
-            SharedGlobalImpl::Box(lock) => lock.lock_read().into(),
-            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
-                .get_or_init(|| {
-                    SynchronizerSized::new(
-                        LockMetadata::poison_policy(*policy),
-                        *sync_type,
-                        (callback)(),
-                    )
-                })
-                .lock_read()
-                .into(),
-        }
+        let lock = match self {
+            SharedGlobalImpl::Value(lock) => lock,
+            SharedGlobalImpl::Box(lock) => return Self::read_sized(lock).into(),
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock.get_or_init(|| {
+                SynchronizerSized::new(
+                    LockMetadata::poison_policy(*policy),
+                    *sync_type,
+                    (callback)(),
+                )
+            }),
+        };
+        Self::read_sized(lock).into()
+    }
+
+    fn read_sized<U>(
+        lock: &SynchronizerSized<LockMetadata, U>,
+    ) -> SynchronizerReadLock<'_, LockMetadata, U> {
+        #[cfg(feature = "deadlock_detection")]
+        crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+        lock.lock_read()
     }
 
     pub(crate) fn write(&self) -> SharedWriteLock<T> {
-        match self {
-            SharedGlobalImpl::Value(lock) => lock.lock_write().into(),
-            SharedGlobalImpl::Box(lock) => lock.lock_write().into(),
-            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock
-                .get_or_init(|| {
-                    SynchronizerSized::new(
-                        LockMetadata::poison_policy(*policy),
-                        *sync_type,
-                        (callback)(),
-                    )
-                })
-                .lock_write()
-                .into(),
-        }
+        let lock = match self {
+            SharedGlobalImpl::Value(lock) => lock,
+            SharedGlobalImpl::Box(lock) => return Self::write_sized(lock).into(),
+            SharedGlobalImpl::Lazy(lock, callback, sync_type, policy) => lock.get_or_init(|| {
+                SynchronizerSized::new(
+                    LockMetadata::poison_policy(*policy),
+                    *sync_type,
+                    (callback)(),
+                )
+            }),
+        };
+        Self::write_sized(lock).into()
+    }
+
+    fn write_sized<U>(
+        lock: &SynchronizerSized<LockMetadata, U>,
+    ) -> SynchronizerWriteLock<'_, LockMetadata, U> {
+        #[cfg(feature = "deadlock_detection")]
+        crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+        lock.lock_write()
     }
 
     pub(crate) fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
@@ -342,9 +395,7 @@ where
             _marker: PhantomData,
         };
 
-        SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        }
+        SharedReadLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
@@ -372,9 +423,7 @@ where
             _marker: PhantomData,
         };
 
-        Some(SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        })
+        Some(SharedReadLock::from_projection(Box::new(lock)))
     }
 }
 
@@ -421,9 +470,7 @@ where
             _marker: PhantomData,
         };
 
-        SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        }
+        SharedReadLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
@@ -451,9 +498,7 @@ where
             _marker: PhantomData,
         };
 
-        Some(SharedReadLock {
-            inner: SharedReadLockInner::Projection(Box::new(lock)),
-        })
+        Some(SharedReadLock::from_projection(Box::new(lock)))
     }
 
     fn lock_write(&self) -> SharedWriteLock<U> {
@@ -486,9 +531,7 @@ where
             _marker: PhantomData,
         };
 
-        SharedWriteLock {
-            inner: SharedWriteLockInner::Projection(Box::new(lock)),
-        }
+        SharedWriteLock::from_projection(Box::new(lock))
     }
 
     fn try_lock_write(&self) -> Option<SharedWriteLock<U>> {
@@ -525,9 +568,7 @@ where
             _marker: PhantomData,
         };
 
-        Some(SharedWriteLock {
-            inner: SharedWriteLockInner::Projection(Box::new(lock)),
-        })
+        Some(SharedWriteLock::from_projection(Box::new(lock)))
     }
 }
 
