@@ -186,7 +186,7 @@ impl<T> Shared<T> {
 }
 
 impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, P>>) {
-    fn read(&self) -> SharedReadLock<P> {
+    fn read(&self) -> SharedReadLock<'_, P> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             projector: &'a Projector<T, P>,
@@ -207,7 +207,7 @@ impl<T: ?Sized, P: ?Sized> SharedProjection<P> for (Shared<T>, Arc<Projector<T, 
         SharedReadLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, P>> {
         let lock = self.0.try_read();
         if let Some(lock) = lock {
             struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
@@ -263,7 +263,7 @@ impl<T: ?Sized> Shared<T> {
     ///
     /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
     /// where you need a `Send` guard, see [`Shared::read_send`].
-    pub fn read(&self) -> SharedReadLock<T> {
+    pub fn read(&self) -> SharedReadLock<'_, T> {
         self.inner.lock_read()
     }
 
@@ -278,7 +278,7 @@ impl<T: ?Sized> Shared<T> {
     }
 
     /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.
-    pub fn try_read(&self) -> Option<SharedReadLock<T>> {
+    pub fn try_read(&self) -> Option<SharedReadLock<'_, T>> {
         self.inner.try_lock_read()
     }
 

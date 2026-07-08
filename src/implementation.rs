@@ -230,7 +230,7 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
-    pub fn lock_read(&self) -> SharedReadLock<T> {
+    pub fn lock_read(&self) -> SharedReadLock<'_, T> {
         self.check_poison();
         match &self {
             SharedImpl::Value(lock) => {
@@ -260,7 +260,7 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
-    pub fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+    pub fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>> {
         self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.try_lock_read().map(|x| x.into()),
@@ -288,7 +288,7 @@ impl<T: ?Sized> SharedImpl<T> {
         SharedReadLockOwned { inner, container }
     }
 
-    pub fn lock_write(&self) -> SharedWriteLock<T> {
+    pub fn lock_write(&self) -> SharedWriteLock<'_, T> {
         self.check_poison();
         match &self {
             SharedImpl::Value(lock) => {
@@ -320,7 +320,7 @@ impl<T: ?Sized> SharedImpl<T> {
         }
     }
 
-    pub fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+    pub fn try_lock_write(&self) -> Option<SharedWriteLock<'_, T>> {
         self.check_poison();
         match &self {
             SharedImpl::Value(lock) => lock.try_lock_write().map(|x| x.into()),
@@ -376,7 +376,7 @@ impl<T: Send> SharedGlobalImpl<T> {
         Self::Lazy(OnceLock::new(), f, sync_type, policy)
     }
 
-    pub(crate) fn read(&self) -> SharedReadLock<T> {
+    pub(crate) fn read(&self) -> SharedReadLock<'_, T> {
         let lock = match self {
             SharedGlobalImpl::Value(lock) => lock,
             SharedGlobalImpl::Box(lock) => return Self::read_sized(lock).into(),
@@ -404,7 +404,7 @@ impl<T: Send> SharedGlobalImpl<T> {
         lock.lock_read()
     }
 
-    pub(crate) fn write(&self) -> SharedWriteLock<T> {
+    pub(crate) fn write(&self) -> SharedWriteLock<'_, T> {
         let lock = match self {
             SharedGlobalImpl::Value(lock) => lock,
             SharedGlobalImpl::Box(lock) => return Self::write_sized(lock).into(),
@@ -432,7 +432,7 @@ impl<T: Send> SharedGlobalImpl<T> {
         lock.lock_write()
     }
 
-    pub(crate) fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+    pub(crate) fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>> {
         match self {
             SharedGlobalImpl::Value(lock) => lock.try_lock_read().map(|x| x.into()),
             SharedGlobalImpl::Box(lock) => lock.try_lock_read().map(|x| x.into()),
@@ -449,7 +449,7 @@ impl<T: Send> SharedGlobalImpl<T> {
         }
     }
 
-    pub(crate) fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+    pub(crate) fn try_lock_write(&self) -> Option<SharedWriteLock<'_, T>> {
         match self {
             SharedGlobalImpl::Value(lock) => lock.try_lock_write().map(|x| x.into()),
             SharedGlobalImpl::Box(lock) => lock.try_lock_write().map(|x| x.into()),
@@ -468,11 +468,11 @@ impl<T: Send> SharedGlobalImpl<T> {
 }
 
 impl<T: Send> SharedProjection<T> for SharedGlobalImpl<T> {
-    fn read(&self) -> SharedReadLock<T> {
+    fn read(&self) -> SharedReadLock<'_, T> {
         (*self).read()
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>> {
         (*self).try_lock_read()
     }
 }
@@ -481,7 +481,7 @@ impl<U: ?Sized, T: Send> SharedProjection<U> for SharedGlobalProjection<T>
 where
     (): ProjectR<T, U>,
 {
-    fn read(&self) -> SharedReadLock<U> {
+    fn read(&self) -> SharedReadLock<'_, U> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             _marker: PhantomData<P>,
@@ -505,7 +505,7 @@ where
         SharedReadLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, U>> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             _marker: PhantomData<P>,
@@ -535,19 +535,19 @@ where
 }
 
 impl<T: Send> SharedMutProjection<T> for SharedGlobalImpl<T> {
-    fn lock_read(&self) -> SharedReadLock<T> {
+    fn lock_read(&self) -> SharedReadLock<'_, T> {
         (*self).read()
     }
 
-    fn lock_write(&self) -> SharedWriteLock<T> {
+    fn lock_write(&self) -> SharedWriteLock<'_, T> {
         (*self).write()
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>> {
         (*self).try_lock_read()
     }
 
-    fn try_lock_write(&self) -> Option<SharedWriteLock<T>> {
+    fn try_lock_write(&self) -> Option<SharedWriteLock<'_, T>> {
         (*self).try_lock_write()
     }
 }
@@ -556,7 +556,7 @@ impl<U: ?Sized, T: Send> SharedMutProjection<U> for SharedGlobalProjection<T>
 where
     (): ProjectR<T, U> + ProjectW<T, U>,
 {
-    fn lock_read(&self) -> SharedReadLock<U> {
+    fn lock_read(&self) -> SharedReadLock<'_, U> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             _marker: PhantomData<P>,
@@ -580,7 +580,7 @@ where
         SharedReadLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<U>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, U>> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             _marker: PhantomData<P>,
@@ -608,7 +608,7 @@ where
         Some(SharedReadLock::from_projection(Box::new(lock)))
     }
 
-    fn lock_write(&self) -> SharedWriteLock<U> {
+    fn lock_write(&self) -> SharedWriteLock<'_, U> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedWriteLock<'a, T>,
             _marker: PhantomData<P>,
@@ -641,7 +641,7 @@ where
         SharedWriteLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_write(&self) -> Option<SharedWriteLock<U>> {
+    fn try_lock_write(&self) -> Option<SharedWriteLock<'_, U>> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedWriteLock<'a, T>,
             _marker: PhantomData<P>,
@@ -680,23 +680,23 @@ where
 }
 
 pub trait SharedMutProjection<T: ?Sized>: Send + Sync {
-    fn lock_read(&self) -> SharedReadLock<T>;
-    fn try_lock_read(&self) -> Option<SharedReadLock<T>>;
-    fn lock_write(&self) -> SharedWriteLock<T>;
-    fn try_lock_write(&self) -> Option<SharedWriteLock<T>>;
+    fn lock_read(&self) -> SharedReadLock<'_, T>;
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>>;
+    fn lock_write(&self) -> SharedWriteLock<'_, T>;
+    fn try_lock_write(&self) -> Option<SharedWriteLock<'_, T>>;
 }
 
 pub trait SharedProjection<T: ?Sized>: Send + Sync {
-    fn read(&self) -> SharedReadLock<T>;
-    fn try_lock_read(&self) -> Option<SharedReadLock<T>>;
+    fn read(&self) -> SharedReadLock<'_, T>;
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>>;
 }
 
 impl<T: ?Sized> SharedProjection<T> for dyn SharedMutProjection<T> {
-    fn read(&self) -> SharedReadLock<T> {
+    fn read(&self) -> SharedReadLock<'_, T> {
         self.lock_read()
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<T>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, T>> {
         SharedMutProjection::try_lock_read(self)
     }
 }

@@ -119,7 +119,7 @@ where
 }
 
 impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW<T, P>) {
-    fn lock_read(&self) -> SharedReadLock<P> {
+    fn lock_read(&self) -> SharedReadLock<'_, P> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedReadLock<'a, T>,
             projector: &'a ProjectorRW<T, P>,
@@ -140,7 +140,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
         SharedReadLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_read(&self) -> Option<SharedReadLock<P>> {
+    fn try_lock_read(&self) -> Option<SharedReadLock<'_, P>> {
         let lock = self.0.try_read();
         if let Some(lock) = lock {
             struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
@@ -166,7 +166,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
         }
     }
 
-    fn lock_write(&self) -> SharedWriteLock<P> {
+    fn lock_write(&self) -> SharedWriteLock<'_, P> {
         struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
             lock: SharedWriteLock<'a, T>,
             projector: &'a ProjectorRW<T, P>,
@@ -193,7 +193,7 @@ impl<T: ?Sized, P: ?Sized> SharedMutProjection<P> for (SharedMut<T>, ProjectorRW
         SharedWriteLock::from_projection(Box::new(lock))
     }
 
-    fn try_lock_write(&self) -> Option<SharedWriteLock<P>> {
+    fn try_lock_write(&self) -> Option<SharedWriteLock<'_, P>> {
         let lock = self.0.try_write();
         if let Some(lock) = lock {
             struct HiddenLock<'a, T: ?Sized, P: ?Sized> {
@@ -366,7 +366,7 @@ impl<T: ?Sized> SharedMut<T> {
     ///
     /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
     /// where you need a `Send` guard, see [`SharedMut::read_send`].
-    pub fn read(&self) -> SharedReadLock<T> {
+    pub fn read(&self) -> SharedReadLock<'_, T> {
         self.inner_impl.lock_read()
     }
 
@@ -381,7 +381,7 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     /// Try to get a read lock for this [`SharedMut`], or return [`None`] if we couldn't.
-    pub fn try_read(&self) -> Option<SharedReadLock<T>> {
+    pub fn try_read(&self) -> Option<SharedReadLock<'_, T>> {
         self.inner_impl.try_lock_read()
     }
 
@@ -394,7 +394,7 @@ impl<T: ?Sized> SharedMut<T> {
     ///
     /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
     /// where you need a `Send` guard, see [`SharedMut::write_send`].
-    pub fn write(&self) -> SharedWriteLock<T> {
+    pub fn write(&self) -> SharedWriteLock<'_, T> {
         self.inner_impl.lock_write()
     }
 
@@ -409,7 +409,7 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     /// Try to get a write lock for this [`SharedMut`], or return [`None`] if we couldn't.
-    pub fn try_write(&self) -> Option<SharedWriteLock<T>> {
+    pub fn try_write(&self) -> Option<SharedWriteLock<'_, T>> {
         self.inner_impl.try_lock_write()
     }
 

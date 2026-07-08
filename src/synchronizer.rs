@@ -107,16 +107,16 @@ impl<M, T> SynchronizerSized<M, T> {
     pub fn metadata(&self) -> &M {
         with_ops!(self: x => &x.metadata)
     }
-    pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    pub fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         with_ops!(self: x => x.lock_read())
     }
-    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         with_ops!(self: x => x.try_lock_read())
     }
-    pub fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    pub fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         with_ops!(self: x => x.lock_write())
     }
-    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         with_ops!(self: x => x.try_lock_write())
     }
 }
@@ -260,16 +260,16 @@ impl<M, T: ?Sized> SynchronizerUnsized<M, T> {
             Self::Mutex(_) => SynchronizerType::Mutex,
         }
     }
-    pub fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    pub fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         with_ops!(self: x => x.lock_read())
     }
-    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    pub fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         with_ops!(self: x => x.try_lock_read())
     }
-    pub fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    pub fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         with_ops!(self: x => x.lock_write())
     }
-    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    pub fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         with_ops!(self: x => x.try_lock_write())
     }
 }
@@ -289,10 +289,10 @@ pub trait SynchronizerOps<M, T: ?Sized> {
     {
         self.try_unwrap().map_err(|x| f(Arc::new(x)))
     }
-    fn lock_read(&self) -> SynchronizerReadLock<M, T>;
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>>;
-    fn lock_write(&self) -> SynchronizerWriteLock<M, T>;
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>>;
+    fn lock_read(&self) -> SynchronizerReadLock<'_, M, T>;
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>>;
+    fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T>;
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>>;
     /// Replace the whole value. Unlike acquiring a write lock and assigning, this can avoid the
     /// read-clone that RCU's write path performs.
     fn set(&self, value: T)
@@ -327,21 +327,21 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RwLock<T>> {
         Ok(self.container.into_inner())
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         SynchronizerReadLock::RwLock(&self.metadata, self.container.read())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         self.container
             .try_read()
             .map(|x| SynchronizerReadLock::RwLock(&self.metadata, x))
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         SynchronizerWriteLock::RwLock(&self.metadata, self.container.write())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         self.container
             .try_write()
             .map(|x| SynchronizerWriteLock::RwLock(&self.metadata, x))
@@ -377,21 +377,21 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, Mutex<T>> {
         Ok(self.container.into_inner())
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         SynchronizerReadLock::Mutex(&self.metadata, self.container.lock())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         self.container
             .try_lock()
             .map(|x| SynchronizerReadLock::Mutex(&self.metadata, x))
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         SynchronizerWriteLock::Mutex(&self.metadata, self.container.lock())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         self.container
             .try_lock()
             .map(|x| SynchronizerWriteLock::Mutex(&self.metadata, x))
@@ -431,19 +431,19 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RcuLock<T>> {
         })
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         SynchronizerReadLock::ReadCopyUpdate(&self.metadata, self.container.read())
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         Some(self.lock_read())
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         SynchronizerWriteLock::ReadCopyUpdate(&self.metadata, self.container.write())
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         Some(self.lock_write())
     }
 
@@ -472,19 +472,19 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, T> {
         Ok(self.container)
     }
 
-    fn lock_read(&self) -> SynchronizerReadLock<M, T> {
+    fn lock_read(&self) -> SynchronizerReadLock<'_, M, T> {
         SynchronizerReadLock::Arc(&self.metadata, &self.container)
     }
 
-    fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>> {
+    fn try_lock_read(&self) -> Option<SynchronizerReadLock<'_, M, T>> {
         Some(self.lock_read())
     }
 
-    fn lock_write(&self) -> SynchronizerWriteLock<M, T> {
+    fn lock_write(&self) -> SynchronizerWriteLock<'_, M, T> {
         unreachable!()
     }
 
-    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+    fn try_lock_write(&self) -> Option<SynchronizerWriteLock<'_, M, T>> {
         unreachable!()
     }
 

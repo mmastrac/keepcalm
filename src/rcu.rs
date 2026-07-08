@@ -34,7 +34,7 @@ impl<T: ?Sized> RcuLock<T> {
     }
 
     /// Take a write lock on this [`RcuLock`], which will commit to the current value of the [`RcuLock`] when the lock is dropped.
-    pub fn write(&self) -> RcuWriteGuard<T> {
+    pub fn write(&self) -> RcuWriteGuard<'_, T> {
         RcuWriteGuard {
             lock: &self.lock,
             writer: Some((self.cloner)(&*self.lock.read())),
