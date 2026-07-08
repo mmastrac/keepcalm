@@ -467,7 +467,7 @@ mod test {
         impl AsRefMut<str> for String {}
 
         let mut x: String = "123".into();
-        let projection = project_cast!(x: String => (dyn AsRefMut<str>));
+        let projection = project_cast!(x: String => dyn AsRefMut<str>);
         assert_eq!(projection.project(&x).as_ref(), "123");
         assert_eq!(projection.project_mut(&mut x).as_mut(), "123");
     }

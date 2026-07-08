@@ -349,6 +349,9 @@ impl<T: ?Sized> SharedImpl<T> {
 
 pub enum SharedGlobalImpl<T> {
     Value(SynchronizerSized<LockMetadata, T>),
+    // Globals are always constructed from a sized value, never a `Box`, so this variant is never
+    // built. It is retained for parity with the read/write match arms and `SharedImpl`.
+    #[allow(dead_code)]
     Box(SynchronizerSized<LockMetadata, Box<T>>),
     Lazy(
         OnceLock<SynchronizerSized<LockMetadata, T>>,
@@ -521,9 +524,7 @@ where
             }
         }
 
-        let Some(lock) = self.0.try_lock_read() else {
-            return None;
-        };
+        let lock = self.0.try_lock_read()?;
 
         let lock = HiddenLock {
             lock,
@@ -596,9 +597,7 @@ where
             }
         }
 
-        let Some(lock) = self.0.try_lock_read() else {
-            return None;
-        };
+        let lock = self.0.try_lock_read()?;
 
         let lock = HiddenLock {
             lock,
@@ -666,9 +665,7 @@ where
             }
         }
 
-        let Some(lock) = self.0.try_lock_write() else {
-            return None;
-        };
+        let lock = self.0.try_lock_write()?;
 
         let lock = HiddenLock {
             lock,

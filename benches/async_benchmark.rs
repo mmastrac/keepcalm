@@ -31,7 +31,9 @@ async fn acquire_lock_keepcalm(lock: &Shared<usize>) -> usize {
 async fn acquire_lock_and_sleep_keepcalm(lock: Shared<usize>) {
     let lock2 = lock.clone();
     let f = tokio::spawn(async move {
-        let l = lock2.read();
+        // This benchmark deliberately holds the lock across `.await`, so it needs the opt-in
+        // `Send` guard. Ordinary `read()` guards are `!Send` and cannot cross the spawn boundary.
+        let l = lock2.read_send();
         tokio::time::sleep(Duration::from_micros(10)).await;
         drop(l);
     });

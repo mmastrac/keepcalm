@@ -85,7 +85,10 @@ impl<'a, M, T: ?Sized> SynchronizerMetadata<M> for SynchronizerWriteLock<'a, M, 
 pub enum SynchronizerSized<M, T> {
     /// Only usable by non-mutable shares.
     Arc(SynchronizerImpl<M, T>),
-    /// RCU-mode, which requires us to bring a cloning function along for the ride.
+    /// RCU-mode, which requires us to bring a cloning function along for the ride. Kept for
+    /// structural parity with [`SynchronizerUnsized`] and the shared `with_ops!` matcher; the
+    /// only user of the sized synchronizer (globals) never selects RCU, so it is never constructed.
+    #[allow(dead_code)]
     ReadCopyUpdate(SynchronizerImpl<M, RcuLock<T>>),
     /// R/W lock.
     RwLock(SynchronizerImpl<M, RwLock<T>>),
@@ -140,6 +143,9 @@ impl<M, T> SynchronizerSized<M, T> {
         }
     }
 
+    /// Parity with [`SynchronizerUnsized::new_cloneable`]; unused because the sized synchronizer
+    /// (globals) never selects RCU.
+    #[allow(dead_code)]
     pub fn new_cloneable(metadata: M, sync_type: SynchronizerType, value: T) -> Self
     where
         T: Clone,

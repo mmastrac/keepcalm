@@ -1,9 +1,5 @@
-use std::sync::{Arc, OnceLock};
-
 use crate::{
-    implementation::{
-        LockMetadata, SharedGlobalImpl, SharedGlobalProjection, SharedImpl, SharedMutProjection,
-    },
+    implementation::{LockMetadata, SharedGlobalImpl, SharedGlobalProjection, SharedImpl},
     synchronizer::{SynchronizerSized, SynchronizerType},
     Castable, PoisonPolicy, Shared, SharedMut, SharedReadLock, SharedWriteLock,
 };
@@ -12,7 +8,6 @@ use crate::{
 /// get a [`SharedMut`].
 pub struct SharedGlobalMut<T: Send> {
     inner: SharedGlobalImpl<T>,
-    projection: OnceLock<Arc<dyn SharedMutProjection<T>>>,
 }
 
 impl<T: Send + Sync> SharedGlobalMut<T> {
@@ -24,7 +19,6 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
                 SynchronizerType::RwLock,
                 t,
             )),
-            projection: OnceLock::new(),
         }
     }
 
@@ -32,7 +26,6 @@ impl<T: Send + Sync> SharedGlobalMut<T> {
     pub const fn new_lazy(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::lazy(f, SynchronizerType::RwLock, PoisonPolicy::Panic),
-            projection: OnceLock::new(),
         }
     }
 }
@@ -70,7 +63,6 @@ impl<T: Send> SharedGlobalMut<T> {
     pub const fn new_lazy_unsync(f: fn() -> T) -> Self {
         Self {
             inner: SharedGlobalImpl::lazy(f, SynchronizerType::Mutex, PoisonPolicy::Panic),
-            projection: OnceLock::new(),
         }
     }
 
@@ -87,7 +79,6 @@ impl<T: Send> SharedGlobalMut<T> {
                 SynchronizerType::Mutex,
                 t,
             )),
-            projection: OnceLock::new(),
         }
     }
 
@@ -139,6 +130,7 @@ impl<T: Send> SharedGlobalMut<T> {
 mod test {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Arc;
     pub type Unsync = std::cell::Cell<()>;
 
     #[test]

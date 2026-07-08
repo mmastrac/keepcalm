@@ -582,9 +582,9 @@ mod test {
         let shared = SharedMut::new(1);
         let shared2 = shared.clone();
         // We can't unwrap with multiple references
-        assert!(matches!(shared.try_unwrap(), Err(_)));
+        assert!(shared.try_unwrap().is_err());
         // We can now unwrap
-        assert!(matches!(shared2.try_unwrap(), Ok(_)));
+        assert!(shared2.try_unwrap().is_ok());
     }
 
     #[test]
