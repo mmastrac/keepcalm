@@ -108,6 +108,40 @@ impl<T: ?Sized> Clone for SharedImpl<T> {
     }
 }
 
+/// True when a panic is unwinding for a reason that should poison a held lock.
+///
+/// A genuine panic while holding a lock may have left the guarded data half-written, so poisoning
+/// is correct. A lockdep-triggered panic, however, aborts *before* acquiring the second lock — the
+/// data under every currently-held lock is consistent — so it must not poison, otherwise a single
+/// proactive deadlock warning would cascade into a poison outage across unrelated requests.
+pub(crate) fn panicking_should_poison() -> bool {
+    if !std::thread::panicking() {
+        return false;
+    }
+    #[cfg(feature = "deadlock_detection")]
+    {
+        !crate::lockdep::is_aborting()
+    }
+    #[cfg(not(feature = "deadlock_detection"))]
+    {
+        true
+    }
+}
+
+/// Marks a lock's metadata poisoned if dropped during a panic. This mirrors what the read/write
+/// guards do, for the fast `set`/`try_set` paths that mutate the value without constructing a guard.
+struct PoisonOnPanic<'a>(&'a LockMetadata);
+
+impl Drop for PoisonOnPanic<'_> {
+    fn drop(&mut self) {
+        if let Some(poison) = &self.0.poison {
+            if panicking_should_poison() {
+                poison.store(true, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+}
+
 impl<T> SharedImpl<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
@@ -119,6 +153,49 @@ impl<T> SharedImpl<T> {
             SharedImpl::ProjectionRO(_) => Err(self),
             SharedImpl::ProjectionStatic(_) => Err(self),
             SharedImpl::ProjectionStaticRO(_) => Err(self),
+        }
+    }
+
+    /// Replace the whole value.
+    ///
+    /// For a directly-held value this replaces it at the primitive level, which lets RCU skip the
+    /// clone that acquiring a write guard would otherwise perform. Projections must preserve the
+    /// rest of the root value, so they fall back to acquiring a write lock and assigning.
+    pub fn set(&self, value: T) {
+        match self {
+            SharedImpl::Value(lock) => {
+                self.check_poison();
+                #[cfg(feature = "deadlock_detection")]
+                crate::lockdep::check_blocking_acquire(
+                    lock.metadata(),
+                    lock.sync_type(),
+                    true,
+                    std::any::type_name::<T>(),
+                );
+                let _poison = PoisonOnPanic(lock.metadata());
+                lock.set(value);
+            }
+            _ => {
+                *self.lock_write() = value;
+            }
+        }
+    }
+
+    /// Try to replace the whole value without blocking, returning it back on failure.
+    pub fn try_set(&self, value: T) -> Result<(), T> {
+        match self {
+            SharedImpl::Value(lock) => {
+                self.check_poison();
+                let _poison = PoisonOnPanic(lock.metadata());
+                lock.try_set(value)
+            }
+            _ => match self.try_lock_write() {
+                Some(mut guard) => {
+                    *guard = value;
+                    Ok(())
+                }
+                None => Err(value),
+            },
         }
     }
 }
@@ -158,12 +235,22 @@ impl<T: ?Sized> SharedImpl<T> {
         match &self {
             SharedImpl::Value(lock) => {
                 #[cfg(feature = "deadlock_detection")]
-                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+                crate::lockdep::check_blocking_acquire(
+                    lock.metadata(),
+                    lock.sync_type(),
+                    false,
+                    std::any::type_name::<T>(),
+                );
                 lock.lock_read().into()
             }
             SharedImpl::Box(lock) => {
                 #[cfg(feature = "deadlock_detection")]
-                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+                crate::lockdep::check_blocking_acquire(
+                    lock.metadata(),
+                    lock.sync_type(),
+                    false,
+                    std::any::type_name::<T>(),
+                );
                 lock.lock_read().into()
             }
             SharedImpl::Projection(p) => p.lock_read(),
@@ -206,12 +293,22 @@ impl<T: ?Sized> SharedImpl<T> {
         match &self {
             SharedImpl::Value(lock) => {
                 #[cfg(feature = "deadlock_detection")]
-                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+                crate::lockdep::check_blocking_acquire(
+                    lock.metadata(),
+                    lock.sync_type(),
+                    true,
+                    std::any::type_name::<T>(),
+                );
                 lock.lock_write().into()
             }
             SharedImpl::Box(lock) => {
                 #[cfg(feature = "deadlock_detection")]
-                crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+                crate::lockdep::check_blocking_acquire(
+                    lock.metadata(),
+                    lock.sync_type(),
+                    true,
+                    std::any::type_name::<T>(),
+                );
                 lock.lock_write().into()
             }
             SharedImpl::Projection(p) => p.lock_write(),
@@ -298,7 +395,12 @@ impl<T: Send> SharedGlobalImpl<T> {
         lock: &SynchronizerSized<LockMetadata, U>,
     ) -> SynchronizerReadLock<'_, LockMetadata, U> {
         #[cfg(feature = "deadlock_detection")]
-        crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), false);
+        crate::lockdep::check_blocking_acquire(
+            lock.metadata(),
+            lock.sync_type(),
+            false,
+            std::any::type_name::<U>(),
+        );
         lock.lock_read()
     }
 
@@ -321,7 +423,12 @@ impl<T: Send> SharedGlobalImpl<T> {
         lock: &SynchronizerSized<LockMetadata, U>,
     ) -> SynchronizerWriteLock<'_, LockMetadata, U> {
         #[cfg(feature = "deadlock_detection")]
-        crate::lockdep::check_blocking_acquire(lock.metadata(), lock.sync_type(), true);
+        crate::lockdep::check_blocking_acquire(
+            lock.metadata(),
+            lock.sync_type(),
+            true,
+            std::any::type_name::<U>(),
+        );
         lock.lock_write()
     }
 

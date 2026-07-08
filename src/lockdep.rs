@@ -33,6 +33,7 @@
 
 use parking_lot::Mutex;
 use std::backtrace::Backtrace;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fmt::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -89,6 +90,40 @@ impl LockId {
     }
 }
 
+/// When a lock is dropped (its last container reference goes away), purge everything the detector
+/// recorded about it. Ids are never reused, so this reclaims memory without losing any actionable
+/// ordering information: a re-created lock gets a fresh id and cannot alias the dropped one.
+///
+/// This is what keeps the detector's memory bounded by the set of *live* locks rather than the set
+/// of locks ever created -- important for long-running processes that churn through short-lived
+/// locks (the recorded backtraces are the heavy part).
+impl Drop for LockId {
+    fn drop(&mut self) {
+        let id = *self.0.get_mut();
+        if id != 0 {
+            forget_lock(id);
+        }
+    }
+}
+
+/// Remove all state associated with a now-dead lock id.
+fn forget_lock(id: u64) {
+    let mut guard = STATE.lock();
+    let Some(state) = guard.as_mut() else {
+        return;
+    };
+    state.names.remove(&id);
+    // Outgoing edges from this lock.
+    state.edges.remove(&id);
+    // Incoming edges into this lock, dropping any source whose edge set becomes empty.
+    state.edges.retain(|_, targets| {
+        targets.remove(&id);
+        !targets.is_empty()
+    });
+    // A lock cannot be dropped while a guard on it is held (the guard keeps the container alive),
+    // so `held` needs no cleanup here.
+}
+
 /// Proof that a lock acquisition was registered in the held-set. Stored in the
 /// guard; returned to [`release_held`] on drop. The token remembers which
 /// thread acquired the lock so that guards dropped on a different thread
@@ -111,9 +146,50 @@ struct DetectorState {
     /// Observed ordering edges: `from` was held while `to` was acquired.
     /// Each edge stores a backtrace of where it was first observed.
     edges: HashMap<u64, HashMap<u64, Backtrace>>,
+    /// The `type_name` of each lock's contained type, recorded on first acquire,
+    /// to make reports human-readable.
+    names: HashMap<u64, &'static str>,
 }
 
 static STATE: Mutex<Option<DetectorState>> = Mutex::new(None);
+
+/// Test-only: `(edge source nodes, total edges, named locks)`, for asserting the detector's memory
+/// stays bounded as locks are created and dropped.
+#[cfg(test)]
+fn state_sizes() -> (usize, usize, usize) {
+    let guard = STATE.lock();
+    match guard.as_ref() {
+        Some(state) => (
+            state.edges.len(),
+            state.edges.values().map(|t| t.len()).sum(),
+            state.names.len(),
+        ),
+        None => (0, 0, 0),
+    }
+}
+
+thread_local! {
+    /// Set while a lockdep-triggered panic is unwinding this thread. Guards drop
+    /// during that unwind but their data is *not* inconsistent (the detector
+    /// aborted *before* acquiring the second lock), so they must not poison. The
+    /// flag is cleared whenever the thread next acquires a lock, which is proof
+    /// the earlier unwind has been caught and we are back on a normal path.
+    static ABORTING: Cell<bool> = const { Cell::new(false) };
+}
+
+fn set_aborting() {
+    ABORTING.with(|c| c.set(true));
+}
+
+fn clear_aborting() {
+    ABORTING.with(|c| c.set(false));
+}
+
+/// Whether a lockdep panic is currently unwinding this thread. Guards consult
+/// this to decide whether a panic-time drop should poison the lock.
+pub(crate) fn is_aborting() -> bool {
+    ABORTING.with(Cell::get)
+}
 
 fn tracked_mode(sync_type: SynchronizerType, write: bool) -> Option<Mode> {
     match sync_type {
@@ -132,7 +208,11 @@ pub(crate) fn check_blocking_acquire(
     metadata: &LockMetadata,
     sync_type: SynchronizerType,
     write: bool,
+    name: &'static str,
 ) {
+    // Reaching here means we are acquiring a lock on a normal path, so any prior
+    // lockdep-abort unwind has been caught: clear the flag.
+    clear_aborting();
     let Some(mode) = tracked_mode(sync_type, write) else {
         return;
     };
@@ -141,6 +221,7 @@ pub(crate) fn check_blocking_acquire(
 
     let mut guard = STATE.lock();
     let state = guard.get_or_insert_with(Default::default);
+    state.names.entry(id).or_insert(name);
 
     // Snapshot the held ids (deduplicated, oldest first) so we can mutate the
     // edge map below without fighting the borrow checker.
@@ -158,8 +239,11 @@ pub(crate) fn check_blocking_acquire(
     }
 
     if let Some(held_mode) = relock {
-        let msg = relock_message(id, held_mode, mode);
+        let msg = relock_message(state, id, held_mode, mode);
         drop(guard);
+        // The detector aborts before the second acquisition, so held locks are
+        // consistent; suppress poisoning as this panic unwinds.
+        set_aborting();
         panic!("{}", msg);
     }
 
@@ -175,6 +259,7 @@ pub(crate) fn check_blocking_acquire(
         if let Some(path) = find_path(&state.edges, id, from) {
             let msg = cycle_message(state, from, id, mode, &path);
             drop(guard);
+            set_aborting();
             panic!("{}", msg);
         }
         state
@@ -188,6 +273,9 @@ pub(crate) fn check_blocking_acquire(
 /// Register a lock as held by the current thread. Called after the acquisition
 /// succeeds (for both blocking and `try_` acquisitions).
 fn register_held(metadata: &LockMetadata, mode: Mode) -> HeldToken {
+    // Successfully acquiring a lock (including via `try_`) proves we are not
+    // mid-abort-unwind, so clear the flag.
+    clear_aborting();
     let id = metadata.lock_id.get();
     let thread = std::thread::current().id();
     let seq = NEXT_HELD_SEQ.fetch_add(1, Ordering::Relaxed);
@@ -244,7 +332,11 @@ pub(crate) fn write_guard_token<T: ?Sized>(
 }
 
 /// Breadth-first search for a path `from -> ... -> to` in the order graph.
-fn find_path(edges: &HashMap<u64, HashMap<u64, Backtrace>>, from: u64, to: u64) -> Option<Vec<u64>> {
+fn find_path(
+    edges: &HashMap<u64, HashMap<u64, Backtrace>>,
+    from: u64,
+    to: u64,
+) -> Option<Vec<u64>> {
     let mut parents: HashMap<u64, u64> = HashMap::new();
     let mut queue = std::collections::VecDeque::new();
     queue.push_back(from);
@@ -299,10 +391,7 @@ fn render_backtrace(backtrace: &Backtrace) -> String {
                 || l.contains("keepcalm::")
         })
     };
-    let start = frames
-        .iter()
-        .position(|f| !is_internal(f))
-        .unwrap_or(0);
+    let start = frames.iter().position(|f| !is_internal(f)).unwrap_or(0);
     let first_scaffold = frames.iter().position(|f| {
         f.iter()
             .any(|l| l.contains("__rust_begin_short_backtrace") || l.contains("lang_start"))
@@ -318,15 +407,25 @@ fn render_backtrace(backtrace: &Backtrace) -> String {
         .join("\n")
 }
 
-fn relock_message(id: u64, held_mode: Mode, mode: Mode) -> String {
+/// Render a lock as `#4 (my_app::HotSet)`, falling back to `#4` if no type name
+/// was recorded.
+fn label(state: &DetectorState, id: u64) -> String {
+    match state.names.get(&id) {
+        Some(name) => format!("#{id} ({name})"),
+        None => format!("#{id}"),
+    }
+}
+
+fn relock_message(state: &DetectorState, id: u64, held_mode: Mode, mode: Mode) -> String {
     let consequence = if held_mode == Mode::Shared && mode == Mode::Shared {
         "This may deadlock: parking_lot read locks are fair and will block a \
          recursive read whenever a writer is waiting."
     } else {
         "This will deadlock."
     };
+    let lock = label(state, id);
     format!(
-        "keepcalm deadlock detection: lock #{id} is already held by this thread!\n\
+        "keepcalm deadlock detection: lock {lock} is already held by this thread!\n\
          \x20 currently held as: {held_mode}\n\
          \x20 attempting to re-acquire as: {mode}\n\
          \x20 {consequence}\n\
@@ -341,16 +440,19 @@ fn cycle_message(
     mode: Mode,
     path: &[u64],
 ) -> String {
+    let acquiring_label = label(state, acquiring);
+    let held_label = label(state, held);
     let mut msg = format!(
         "keepcalm deadlock detection: lock-order cycle detected!\n\
-         \x20 this thread is about to acquire lock #{acquiring} ({mode}) while holding lock #{held},\n\
+         \x20 this thread is about to acquire lock {acquiring_label} ({mode}) while holding lock {held_label},\n\
          \x20 but the opposite ordering has already been observed:\n"
     );
     for pair in path.windows(2) {
         let (from, to) = (pair[0], pair[1]);
+        let (from_label, to_label) = (label(state, from), label(state, to));
         let _ = write!(
             msg,
-            "\n  lock #{to} was acquired while lock #{from} was held, first observed at:\n"
+            "\n  lock {to_label} was acquired while lock {from_label} was held, first observed at:\n"
         );
         match state.edges.get(&from).and_then(|m| m.get(&to)) {
             Some(backtrace) => {
@@ -485,13 +587,115 @@ mod test {
     #[test]
     fn cross_thread_drop_releases() {
         let a = SharedMut::new(1);
-        let guard = a.write();
-        // Guards are Send: drop it on another thread.
+        // Ordinary guards are `!Send`
+        let guard = a.write_send();
         std::thread::scope(|s| {
             s.spawn(move || drop(guard));
         });
         // If the held-entry leaked, this would report a re-entrant acquisition.
         let _g = a.write();
+    }
+
+    #[test]
+    #[should_panic(expected = "lock-order cycle detected")]
+    fn set_participates_in_order_detection() {
+        // `set` acquires the lock (briefly) too, so calling it while holding another lock
+        // establishes an ordering edge and can reveal an inversion.
+        let a = SharedMut::new(1);
+        let b = SharedMut::new(2);
+        {
+            let _ga = a.write();
+            b.set(20); // records a -> b
+        }
+        let _gb = b.write();
+        a.set(10); // b -> a inverts the recorded order
+    }
+
+    #[test]
+    #[should_panic(expected = "already held by this thread")]
+    fn const_global_projection_shares_root_lock() {
+        use crate::SharedGlobalMut;
+        static G: SharedGlobalMut<(u32, u32)> = SharedGlobalMut::new((1, 2));
+        static P0: crate::SharedMut<u32> = crate::project_global!(mut G => 0);
+        let _root = G.read();
+        // The projection locks the same underlying RwLock as the global.
+        let _proj = P0.read();
+    }
+
+    #[test]
+    fn cycle_panic_does_not_poison_held_lock() {
+        // Establish the a -> b ordering.
+        let a = SharedMut::new(1);
+        let b = SharedMut::new(2);
+        {
+            let _ga = a.write();
+            let _gb = b.write();
+        }
+        // Now provoke the inversion while holding `b`: acquiring `a` panics. `b` was held but its
+        // data is consistent (the detector aborts before taking `a`), so `b` must NOT be poisoned.
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _gb = b.write();
+            let _ga = a.write(); // lockdep cycle panic
+        }));
+        assert!(result.is_err(), "expected a lockdep panic");
+
+        // Both locks must remain usable -- no poison cascade.
+        assert_eq!(*b.read(), 2);
+        assert_eq!(*a.read(), 1);
+        *b.write() = 20;
+        assert_eq!(*b.read(), 20);
+    }
+
+    #[test]
+    fn report_names_locks_by_type() {
+        struct AlphaState(#[allow(dead_code)] u32);
+        struct BetaState(#[allow(dead_code)] u32);
+        let a = SharedMut::new(AlphaState(1));
+        let b = SharedMut::new(BetaState(2));
+        {
+            let _ga = a.write();
+            let _gb = b.write();
+        }
+        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _gb = b.write();
+            let _ga = a.write();
+        }));
+        let err = result.expect_err("expected a lockdep panic");
+        let msg = err
+            .downcast_ref::<String>()
+            .expect("panic message should be a String");
+        assert!(
+            msg.contains("AlphaState"),
+            "message should name AlphaState: {msg}"
+        );
+        assert!(
+            msg.contains("BetaState"),
+            "message should name BetaState: {msg}"
+        );
+    }
+
+    #[test]
+    fn dropped_locks_are_forgotten() {
+        let (_, edges_before, names_before) = super::state_sizes();
+        // Churn through many short-lived locks, each pair acquired in a consistent order so an edge
+        // and two name entries are recorded, then dropped.
+        for _ in 0..1000 {
+            let a = SharedMut::new(1);
+            let b = SharedMut::new(2);
+            let _ga = a.write();
+            let _gb = b.write();
+        }
+        let (_, edges_after, names_after) = super::state_sizes();
+        // If nothing were purged this would grow by ~1000 edges and ~2000 names. The threshold
+        // absorbs the handful of live locks other concurrent tests may hold at the sample instant.
+        assert!(
+            edges_after <= edges_before + 100,
+            "edges leaked across churn: {edges_before} -> {edges_after}"
+        );
+        assert!(
+            names_after <= names_before + 100,
+            "names leaked across churn: {names_before} -> {names_after}"
+        );
     }
 
     #[test]

@@ -97,6 +97,14 @@ impl<T: ?Sized> Shared<T> {
     }
 }
 
+impl<T: ?Sized + 'static> Shared<T> {
+    /// Create a [`Shared`] from a static projection table. This is normally
+    /// invoked via [`crate::project_global!`].
+    pub const fn from_static_projection(projection: &'static crate::StaticProjectionRO<T>) -> Self {
+        Self::from_inner(SharedImpl::ProjectionStaticRO(projection))
+    }
+}
+
 impl<T: Send> Shared<T> {
     /// The [`Shared::new`] function requires a type that is both `Send + Sync`. If this is not possible, you may call
     /// [`Shared::new_unsync`] to create a [`Shared`] implementation that uses a [`std::sync::Mutex`].
@@ -152,6 +160,18 @@ impl<T: Send + Sync + 'static> Shared<T> {
                 t,
             )),
         }
+    }
+}
+
+impl<T: ?Sized + 'static> crate::Project<T> for Shared<T> {
+    type Projected<P: ?Sized + 'static> = Shared<P>;
+
+    fn project_path<P: ?Sized + 'static>(
+        &self,
+        ro: impl for<'a> Fn(&'a T) -> &'a P + Send + Sync + 'static,
+        _rw: impl for<'a> Fn(&'a mut T) -> &'a mut P + Send + Sync + 'static,
+    ) -> Shared<P> {
+        self.project_fn(ro)
     }
 }
 
@@ -240,8 +260,21 @@ impl<T: ?Sized> Shared<T> {
     }
 
     /// Get a read lock for this [`Shared`].
+    ///
+    /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
+    /// where you need a `Send` guard, see [`Shared::read_send`].
     pub fn read(&self) -> SharedReadLock<T> {
         self.inner.lock_read()
+    }
+
+    /// Get a `Send` read lock for this [`Shared`].
+    ///
+    /// Unlike [`Shared::read`], the returned [`SendGuard`] is `Send`, which re-enables holding the
+    /// lock across an `.await` or moving it between threads. **Only use this if you understand the
+    /// consequences**! Holding a blocking lock across a suspend point can stall or deadlock an
+    /// async executor. See [`crate::SendGuard`].
+    pub fn read_send(&self) -> crate::SendGuard<SharedReadLock<'_, T>> {
+        crate::SendGuard::new(self.read())
     }
 
     /// Try to get a read lock for this [`Shared`], or return [`None`] if we couldn't.

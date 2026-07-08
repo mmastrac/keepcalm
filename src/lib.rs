@@ -23,7 +23,9 @@ pub use erasedfuture::ErasedFuture as _ErasedFuturePrivate;
 pub use global::SharedGlobal;
 pub use globalmut::SharedGlobalMut;
 pub use implementation::PoisonPolicy;
-pub use locks::{SharedReadLock, SharedWriteLock};
-pub use projection::{Castable, Projector, ProjectorRW};
+pub use locks::{SendGuard, SharedReadLock, SharedWriteLock};
+pub use projection::{
+    Castable, Project, Projector, ProjectorRW, StaticProjection, StaticProjectionRO,
+};
 pub use shared::Shared;
 pub use sharedmut::SharedMut;

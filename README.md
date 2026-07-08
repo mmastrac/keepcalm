@@ -19,7 +19,7 @@ Advantages of `keepcalm`:
  * Everything is [`project!`]able, which means you can adjust the granularity of your locks at any time without having to refactor the whole
    system. If you want finer-grained locks at a later date, the code that uses the shared containers doesn't change!
  * Writeable containers can be turned into read-only containers, while still retaining the ability for other code to update the contents.
- * Read and write guards are `Send` thanks to the `parking_lot` crate.
+ * Read and write guards are `!Send`, but an opt-in `read_send`/`write_send` is available when you genuinely need a `Send` guard and are aware of the potential deadlock consequences.
  * Each synchronization primitive transparently manages the poisoned state (if code `panic!`s while the lock is being held). If you don't want to
    poison on `panic!`, constructors are available to disable this option entirely.
  * `static` Globally-scoped containers for both `Sync` and `!Sync` objects are easily constructed using [`SharedGlobal`], and can provide [`Shared`]
@@ -66,6 +66,26 @@ The following global container types are available:
 | [`SharedGlobalMut::new`]       | `static RwLock<T>`       | This is a global mutable object, for types that are `Send` + `Sync`.
 | [`SharedGlobalMut::new_lazy`]  | `static Lazy<RwLock<T>>` | This is a lazily-initialized global mutable object, for types that are `Send` + `Sync`.
 | [`SharedGlobalMut::new_mutex`] | `static Mutex<T>`        | This is a global mutable object, for types that are `Send` but not necessarily `Sync`.
+
+## Choosing a mutable primitive
+
+All three mutable backings are interchangeable through the [`SharedMut`] interface, so you can start
+with the default and change your mind later. They differ in a few properties worth knowing:
+
+| Constructor              | Backing          | Poison on panic | Reads         | Concurrent reads | Writes                       | Participates in deadlock graph |
+|--------------------------|------------------|-----------------|---------------|------------------|------------------------------|--------------------------------|
+| [`SharedMut::new`]       | `RwLock`         | yes (default)   | blocks writers| yes              | exclusive                    | yes                            |
+| [`SharedMut::new_mutex`] | `Mutex`          | yes (default)   | exclusive     | no               | exclusive                    | yes                            |
+| [`SharedMut::new_rcu`]   | `RwLock<Arc<T>>` | no (ignored)    | **lock-free** `Arc` snapshot | yes | clone-on-write (or [`SharedMut::set`], which skips the clone) | **no** |
+
+The stand-out row is RCU. A read is just an `Arc` snapshot of the current value: it never blocks a
+writer, and — because it takes no lock that any other acquisition can wait on — it can never be part
+of a lock-order cycle. See [Deadlock detection](#deadlock-detection) for why that makes it the
+escape hatch for lock-ordering bugs.
+
+Every mutable container can also be replaced wholesale with [`SharedMut::set`] (or the non-blocking
+[`SharedMut::try_set`]) instead of `*container.write() = value`. For RCU this is not just sugar: it
+installs the new value without the read-copy that a write guard performs.
 
 ## Basic syntax
 
@@ -202,6 +222,28 @@ static GLOBAL_LAZY: SharedGlobalMut<HashMap<&str, usize>> =
     SharedGlobalMut::new_lazy(|| HashMap::from_iter([("a", 1), ("b", 2)]));
 ```
 
+Globals can be projected in `const` contexts using [`project_global!`], so a field of a global
+can itself be exposed as a `static` [`Shared`] or [`SharedMut`] — without allocation, and while
+still sharing the root's lock:
+
+```rust
+# use keepcalm::*;
+struct App {
+    name: String,
+    port: u16,
+}
+static APP: SharedGlobalMut<App> = SharedGlobalMut::new_lazy(|| App {
+    name: "server".to_string(),
+    port: 80,
+});
+static NAME: SharedMut<String> = project_global!(mut APP => name);
+static PORT: Shared<u16> = project_global!(APP => port);
+
+*NAME.write() += "-1";
+assert_eq!(APP.read().name, "server-1");
+assert_eq!(*PORT.read(), 80);
+```
+
 ## Deadlock detection
 
 ***NOTE**: This requires the `--feature deadlock_detection` flag*
@@ -230,9 +272,16 @@ let _a = a.write();     // panics: b -> a inverts the recorded order
 ```
 
 Because every container funnels through the same erased lock implementation, this works
-uniformly across `RwLock`, `Mutex`, globals and projected containers. Plain `Arc` and RCU
-containers never block while held and are exempt. `try_read`/`try_write` cannot deadlock and
-are never reported, but locks they successfully acquire are tracked as held.
+uniformly across `RwLock`, `Mutex`, globals and projected containers. The report names each lock
+by the type it guards (e.g. `lock #1 (my_app::HotSet)`). Plain `Arc` and RCU containers never
+block while held and are exempt. `try_read`/`try_write` cannot deadlock and are never reported,
+but locks they successfully acquire are tracked as held.
+
+A detected cycle `panic!`s but does **not** poison the locks involved: the detector aborts
+*before* acquiring the second lock, so the data under every currently-held lock is still
+consistent. This means a single proactive warning brings down one code path (e.g. one request on
+a server) rather than cascading into a poison outage across every subsequent access. (A genuine
+panic while a lock is held still poisons as usual.)
 
 This feature is intended for debug and test builds: every blocking acquisition consults a
 global registry. Enable it in CI (`cargo test --features deadlock_detection`) and leave it
@@ -273,7 +322,11 @@ Both [`Shared`] and [`SharedMut`] allow *projection* into the underlying type. P
 either a subset of a type, or to cast a type to a trait. The [`project!`] and [`project_cast!`] macros can simplify
 this code.
 
-Note that projections are always linked to the root object! If a projection is locked, the root object is locked.
+Note that projections are always linked to the root object! **A projection shares its source's
+lock — and its lock-order identity.** Locking a projection locks the whole root, so two projections
+of the same source (e.g. `state.config` and `state.sessions` obtained via `project_fn`) are *not*
+independent locks: reading one contends with, and orders against, all the others. Under the
+`deadlock_detection` feature a projection is reported as its root lock for exactly this reason.
 
 Casting:
 
@@ -288,7 +341,8 @@ let shared_asref: SharedMut<dyn AsRef<str>> = shared.cast();
 let shared_asref: SharedMut<dyn AsRef<str>> = shared.project(project_cast!(x: String => dyn AsRef<str>));
 ```
 
-Subset of a struct/tuple:
+Subset of a struct/tuple — pass the container and the field path to [`project!`] and get the
+projected container back, with no type annotations (tuple-index chains like `tuple.0` work too):
 
 ```rust
 # use keepcalm::*;
@@ -298,11 +352,26 @@ struct Foo {
 }
 
 let shared = SharedMut::new(Foo::default());
-let shared_string: SharedMut<String> = shared.project(project!(x: Foo, x.tuple.0));
+let shared_string = project!(shared => tuple.0);
 
 *shared_string.write() += "hello, world";
 assert_eq!(shared.read().tuple.0, "hello, world");
 assert_eq!(*shared_string.read(), "hello, world");
+```
+
+This form works on both [`SharedMut`] and [`Shared`] receivers. For projections that aren't
+simple field paths, build a standalone projector with the original form,
+`shared.project(project!(x: Foo, x.tuple.0))`, or supply the projection functions directly
+via `project_fn`.
+
+Read and write guards can also be projected after the lock is taken, using
+[`SharedReadLock::map`] and [`SharedWriteLock::map`]:
+
+```rust
+# use keepcalm::*;
+let shared = SharedMut::new((1, "hello".to_string()));
+let guard = shared.read().map(|t| &t.1);
+assert_eq!(*guard, "hello");
 ```
 
 ## Unsized types

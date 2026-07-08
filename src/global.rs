@@ -94,6 +94,11 @@ impl<T: Send> SharedGlobal<T> {
         self.inner.read()
     }
 
+    /// Try to lock the global [`SharedGlobal`] for reading directly.
+    pub fn try_read(&'static self) -> Option<SharedReadLock<'static, T>> {
+        self.inner.try_lock_read()
+    }
+
     /// Cast this [`SharedGlobal`] to a new type.
     ///
     /// See [`Castable`] for more information.
@@ -163,5 +168,13 @@ mod test {
     #[test]
     fn test_global_lazy_direct() {
         assert_eq!(GLOBAL_LAZY.read().len(), 2);
+    }
+
+    #[test]
+    fn test_global_project_const() {
+        static PAIR: SharedGlobal<(u32, u32)> = SharedGlobal::new((1, 2));
+        static SECOND: crate::Shared<u32> = crate::project_global!(PAIR => 1);
+        assert_eq!(*SECOND.read(), 2);
+        _ = SECOND.try_read().expect("Should be able to read");
     }
 }

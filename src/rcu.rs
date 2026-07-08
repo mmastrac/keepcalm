@@ -41,6 +41,28 @@ impl<T: ?Sized> RcuLock<T> {
         }
     }
 
+    /// Replace the value outright, without cloning the current contents.
+    ///
+    /// [`RcuLock::write`] must clone the current value so that in-place mutations have something to
+    /// start from; when the whole value is being replaced that clone is wasted, so `set` skips it
+    /// and installs the new value directly.
+    pub fn set(&self, value: T)
+    where
+        T: Sized,
+    {
+        *self.lock.write() = Arc::new(value);
+    }
+
+    /// Replace the value outright, without cloning the current contents. Like all RCU writes this
+    /// never contends with readers, so it always succeeds (matching [`RcuLock::write`]).
+    pub fn try_set(&self, value: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
+        self.set(value);
+        Ok(())
+    }
+
     pub fn try_unwrap(self) -> Result<T, Self>
     where
         T: Sized,

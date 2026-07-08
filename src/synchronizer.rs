@@ -240,6 +240,14 @@ impl<M, T> SynchronizerUnsized<M, T> {
             Self::Mutex(x) => match_arm!(x, Mutex),
         }
     }
+
+    pub fn set(&self, value: T) {
+        with_ops!(self: x => x.set(value))
+    }
+
+    pub fn try_set(&self, value: T) -> Result<(), T> {
+        with_ops!(self: x => x.try_set(value))
+    }
 }
 
 impl<M, T: ?Sized> SynchronizerUnsized<M, T> {
@@ -285,6 +293,15 @@ pub trait SynchronizerOps<M, T: ?Sized> {
     fn try_lock_read(&self) -> Option<SynchronizerReadLock<M, T>>;
     fn lock_write(&self) -> SynchronizerWriteLock<M, T>;
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>>;
+    /// Replace the whole value. Unlike acquiring a write lock and assigning, this can avoid the
+    /// read-clone that RCU's write path performs.
+    fn set(&self, value: T)
+    where
+        T: Sized;
+    /// Try to replace the whole value without blocking, returning it back on failure.
+    fn try_set(&self, value: T) -> Result<(), T>
+    where
+        T: Sized;
 }
 
 pub struct SynchronizerImpl<M, C: ?Sized> {
@@ -329,6 +346,26 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RwLock<T>> {
             .try_write()
             .map(|x| SynchronizerWriteLock::RwLock(&self.metadata, x))
     }
+
+    fn set(&self, value: T)
+    where
+        T: Sized,
+    {
+        *self.container.write() = value;
+    }
+
+    fn try_set(&self, value: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
+        match self.container.try_write() {
+            Some(mut guard) => {
+                *guard = value;
+                Ok(())
+            }
+            None => Err(value),
+        }
+    }
 }
 
 impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, Mutex<T>> {
@@ -358,6 +395,26 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, Mutex<T>> {
         self.container
             .try_lock()
             .map(|x| SynchronizerWriteLock::Mutex(&self.metadata, x))
+    }
+
+    fn set(&self, value: T)
+    where
+        T: Sized,
+    {
+        *self.container.lock() = value;
+    }
+
+    fn try_set(&self, value: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
+        match self.container.try_lock() {
+            Some(mut guard) => {
+                *guard = value;
+                Ok(())
+            }
+            None => Err(value),
+        }
     }
 }
 
@@ -389,6 +446,21 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, RcuLock<T>> {
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
         Some(self.lock_write())
     }
+
+    fn set(&self, value: T)
+    where
+        T: Sized,
+    {
+        // RCU's win: install the new value without cloning the current one.
+        self.container.set(value);
+    }
+
+    fn try_set(&self, value: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
+        self.container.try_set(value)
+    }
 }
 
 impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, T> {
@@ -413,6 +485,20 @@ impl<M, T: ?Sized> SynchronizerOps<M, T> for SynchronizerImpl<M, T> {
     }
 
     fn try_lock_write(&self) -> Option<SynchronizerWriteLock<M, T>> {
+        unreachable!()
+    }
+
+    fn set(&self, _value: T)
+    where
+        T: Sized,
+    {
+        unreachable!()
+    }
+
+    fn try_set(&self, _value: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
         unreachable!()
     }
 }

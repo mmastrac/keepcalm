@@ -213,6 +213,56 @@ mod test {
     }
 
     #[test]
+    fn test_global_project_const() {
+        struct Config {
+            name: String,
+            port: u16,
+        }
+        struct App {
+            config: Config,
+            count: usize,
+        }
+        static APP: SharedGlobalMut<App> = SharedGlobalMut::new(App {
+            config: Config {
+                name: String::new(),
+                port: 80,
+            },
+            count: 0,
+        });
+        // Projections of a global are themselves usable as statics.
+        static NAME: crate::SharedMut<String> = crate::project_global!(mut APP => config.name);
+        static PORT: crate::Shared<u16> = crate::project_global!(APP => config.port);
+
+        *NAME.write() += "server";
+        assert_eq!(*NAME.read(), "server");
+        assert_eq!(APP.read().config.name, "server");
+        assert_eq!(*PORT.read(), 80);
+        _ = NAME.try_read().expect("Should be able to read");
+        _ = NAME.try_write().expect("Should be able to write");
+        _ = PORT.try_read().expect("Should be able to read");
+
+        // The macro also works in expression position (inline const block).
+        let count = crate::project_global!(mut APP => count);
+        *count.write() += 1;
+        assert_eq!(APP.read().count, 1);
+    }
+
+    #[test]
+    fn test_global_project_const_lazy() {
+        struct Stats {
+            hits: usize,
+            misses: usize,
+        }
+        static STATS: SharedGlobalMut<Stats> =
+            SharedGlobalMut::new_lazy(|| Stats { hits: 1, misses: 2 });
+        static HITS: crate::SharedMut<usize> = crate::project_global!(mut STATS => hits);
+
+        *HITS.write() += 10;
+        assert_eq!(*HITS.read(), 11);
+        assert_eq!(STATS.read().misses, 2);
+    }
+
+    #[test]
     fn test_global_cast() {
         static GLOBAL: SharedGlobalMut<[i32; 2]> = SharedGlobalMut::new_lazy(|| [1, 2]);
         let shared = GLOBAL.cast::<[i32]>();

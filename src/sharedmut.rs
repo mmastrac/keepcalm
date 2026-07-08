@@ -94,6 +94,14 @@ impl<T: ?Sized> SharedMut<T> {
     }
 }
 
+impl<T: ?Sized + 'static> SharedMut<T> {
+    /// Create a [`SharedMut`] from a static projection table. This is normally
+    /// invoked via [`crate::project_global!`].
+    pub const fn from_static_projection(projection: &'static StaticProjection<T>) -> Self {
+        Self::from_inner(SharedImpl::ProjectionStatic(projection))
+    }
+}
+
 #[cfg(feature = "serde")]
 use serde::Serialize;
 
@@ -293,6 +301,18 @@ impl<T: Send + Sync + Clone + 'static> SharedMut<T> {
     }
 }
 
+impl<T: ?Sized + 'static> Project<T> for SharedMut<T> {
+    type Projected<P: ?Sized + 'static> = SharedMut<P>;
+
+    fn project_path<P: ?Sized + 'static>(
+        &self,
+        ro: impl for<'a> Fn(&'a T) -> &'a P + Send + Sync + 'static,
+        rw: impl for<'a> Fn(&'a mut T) -> &'a mut P + Send + Sync + 'static,
+    ) -> SharedMut<P> {
+        self.project_fn(ro, rw)
+    }
+}
+
 impl<T> SharedMut<T> {
     /// Attempt to unwrap this synchronized object if we are the only holder of its value.
     pub fn try_unwrap(self) -> Result<T, Self> {
@@ -343,8 +363,21 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     /// Get a read lock for this [`SharedMut`].
+    ///
+    /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
+    /// where you need a `Send` guard, see [`SharedMut::read_send`].
     pub fn read(&self) -> SharedReadLock<T> {
         self.inner_impl.lock_read()
+    }
+
+    /// Get a `Send` read lock for this [`SharedMut`].
+    ///
+    /// Unlike [`SharedMut::read`], the returned [`SendGuard`] is `Send`, which re-enables holding
+    /// the lock across an `.await` or moving it between threads. **Only use this if you understand
+    /// the consequences** — holding a blocking lock across a suspend point can stall or deadlock an
+    /// async executor. See [`SendGuard`].
+    pub fn read_send(&self) -> SendGuard<SharedReadLock<'_, T>> {
+        SendGuard::new(self.read())
     }
 
     /// Try to get a read lock for this [`SharedMut`], or return [`None`] if we couldn't.
@@ -358,8 +391,21 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     /// Get a write lock for this [`SharedMut`].
+    ///
+    /// The returned guard is `!Send`, so it cannot be held across an `.await`. For the rare case
+    /// where you need a `Send` guard, see [`SharedMut::write_send`].
     pub fn write(&self) -> SharedWriteLock<T> {
         self.inner_impl.lock_write()
+    }
+
+    /// Get a `Send` write lock for this [`SharedMut`].
+    ///
+    /// Unlike [`SharedMut::write`], the returned [`SendGuard`] is `Send`, which re-enables holding
+    /// the lock across an `.await` or moving it between threads. **Only use this if you understand
+    /// the consequences** — holding a blocking lock across a suspend point can stall or deadlock an
+    /// async executor. See [`SendGuard`].
+    pub fn write_send(&self) -> SendGuard<SharedWriteLock<'_, T>> {
+        SendGuard::new(self.write())
     }
 
     /// Try to get a write lock for this [`SharedMut`], or return [`None`] if we couldn't.
@@ -368,11 +414,27 @@ impl<T: ?Sized> SharedMut<T> {
     }
 
     /// Atomically set the value of this [`SharedMut`] to a new value.
+    ///
+    /// For a non-projected container this replaces the value directly, which avoids the copy that
+    /// an RCU ([`SharedMut::new_rcu`]) container performs when a write lock is acquired.
     pub fn set(&self, t: T)
     where
         T: Sized,
     {
-        *self.write() = t;
+        self.inner_impl.set(t);
+    }
+
+    /// Try to set the value of this [`SharedMut`] without blocking. On success returns `Ok(())`;
+    /// if the lock could not be taken without blocking, returns the value back as `Err`.
+    ///
+    /// As with [`SharedMut::set`], a non-projected container replaces the value directly and avoids
+    /// the RCU write copy. RCU ([`SharedMut::new_rcu`]) containers never contend with readers, so
+    /// `try_set` on an RCU container always succeeds.
+    pub fn try_set(&self, t: T) -> Result<(), T>
+    where
+        T: Sized,
+    {
+        self.inner_impl.try_set(t)
     }
 
     /// Cast this [`SharedMut`] to a new type.
@@ -401,7 +463,6 @@ impl<T: ?Sized> SharedMut<T> {
             Err(inner_impl) => Err(Self { inner_impl }),
         }
     }
-
 
     #[allow(unused)]
     pub(crate) fn write_owned(&self) -> SharedWriteLockOwned<T> {
@@ -631,6 +692,114 @@ mod test {
         fn serialize<S: serde::Serialize>(_: S) {}
         let shared = SharedMut::new((1, 2, 3));
         serialize(shared);
+    }
+
+    /// The whole point of the `set` optimization: replacing an RCU value must not clone the
+    /// existing contents the way acquiring a write guard does.
+    #[test]
+    pub fn test_rcu_set_avoids_clone() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        use std::sync::Arc;
+
+        struct Tracked {
+            val: u32,
+            clones: Arc<AtomicUsize>,
+        }
+        impl Clone for Tracked {
+            fn clone(&self) -> Self {
+                self.clones.fetch_add(1, Ordering::SeqCst);
+                Tracked {
+                    val: self.val,
+                    clones: self.clones.clone(),
+                }
+            }
+        }
+
+        let clones = Arc::new(AtomicUsize::new(0));
+        let shared = SharedMut::new_rcu(Tracked {
+            val: 1,
+            clones: clones.clone(),
+        });
+
+        // set() installs the new value directly -- no clone of the old value.
+        clones.store(0, Ordering::SeqCst);
+        shared.set(Tracked {
+            val: 2,
+            clones: clones.clone(),
+        });
+        assert_eq!(clones.load(Ordering::SeqCst), 0, "set must not clone");
+        assert_eq!(shared.read().val, 2);
+
+        // try_set behaves the same when uncontended.
+        clones.store(0, Ordering::SeqCst);
+        assert!(shared
+            .try_set(Tracked {
+                val: 3,
+                clones: clones.clone(),
+            })
+            .is_ok());
+        assert_eq!(clones.load(Ordering::SeqCst), 0, "try_set must not clone");
+        assert_eq!(shared.read().val, 3);
+
+        // For contrast, acquiring a write guard *does* copy the current value.
+        clones.store(0, Ordering::SeqCst);
+        {
+            let _guard = shared.write();
+        }
+        assert_eq!(clones.load(Ordering::SeqCst), 1, "write() copies for RCU");
+    }
+
+    #[test]
+    pub fn test_set_all_primitives() {
+        for shared in [
+            SharedMut::new((1, 2)),
+            SharedMut::new_mutex((1, 2)),
+            SharedMut::new_rcu((1, 2)),
+        ] {
+            shared.set((10, 20));
+            assert_eq!(shared.read(), (10, 20));
+            shared.try_set((30, 40)).expect("uncontended");
+            assert_eq!(shared.read(), (30, 40));
+        }
+    }
+
+    #[test]
+    pub fn test_set_projection() {
+        let shared = SharedMut::new((1, 2));
+        let first = project!(shared => 0);
+        // Setting through a projection must preserve the rest of the root.
+        first.set(100);
+        assert_eq!(shared.read(), (100, 2));
+        first.try_set(200).expect("uncontended");
+        assert_eq!(shared.read(), (200, 2));
+    }
+
+    #[test]
+    pub fn test_try_set_contended() {
+        // RwLock: a live read lock blocks a write, so try_set returns the value back.
+        let shared = SharedMut::new(1);
+        let read = shared.read();
+        assert_eq!(shared.try_set(2), Err(2));
+        assert_eq!(*read, 1);
+        drop(read);
+        assert_eq!(shared.try_set(2), Ok(()));
+        assert_eq!(shared.read(), 2);
+
+        // Mutex: a live read lock (mutex serializes reads) also blocks.
+        let shared = SharedMut::new_mutex(1);
+        let read = shared.read();
+        assert_eq!(shared.try_set(2), Err(2));
+        drop(read);
+        assert_eq!(shared.try_set(2), Ok(()));
+        assert_eq!(shared.read(), 2);
+
+        // RCU: reads are Arc snapshots that don't hold the lock, so try_set always succeeds,
+        // even with a live reader outstanding.
+        let shared = SharedMut::new_rcu(1);
+        let read = shared.read();
+        assert_eq!(shared.try_set(2), Ok(()));
+        assert_eq!(*read, 1); // the snapshot is unchanged
+        assert_eq!(shared.read(), 2);
     }
 
     #[test]
